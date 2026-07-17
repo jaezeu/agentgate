@@ -1,17 +1,21 @@
-variable "hcp_terraform_organization" {
-  description = "HCP Terraform organization containing the three sandbox workspaces."
+variable "state_bucket" {
+  description = "S3 bucket created by deploy/bootstrap that holds every root's Terraform state."
   type        = string
 
   validation {
-    condition     = length(trimspace(var.hcp_terraform_organization)) >= 3
-    error_message = "hcp_terraform_organization must not be empty."
+    condition     = can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.state_bucket))
+    error_message = "state_bucket must be a valid S3 bucket name."
   }
 }
 
-variable "infra_workspace_name" {
-  description = "HCP Terraform workspace that owns deploy/infra."
+variable "state_bucket_region" {
+  description = "AWS region of the Terraform state bucket."
   type        = string
-  default     = "agentgate-infra"
+
+  validation {
+    condition     = can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$", var.state_bucket_region))
+    error_message = "state_bucket_region must be a valid AWS region name."
+  }
 }
 
 variable "cluster_domain" {
@@ -66,12 +70,6 @@ variable "runner_namespace" {
   default     = "agentgate-sandbox"
 }
 
-variable "hcp_agent_namespace" {
-  description = "Namespace containing the HCP Terraform agent that can reach in-cluster Vault."
-  type        = string
-  default     = "hcp-terraform-agent"
-}
-
 variable "postgresql_credentials_secret_name" {
   description = "Existing runtime Secret containing password and postgres-password keys; values are bootstrapped outside Terraform state."
   type        = string
@@ -79,13 +77,13 @@ variable "postgresql_credentials_secret_name" {
 }
 
 variable "vault_configuration_enabled" {
-  description = "Enable Terraform-driven Vault resources only after Vault initialization/unseal and HCP Vault dynamic credentials bootstrap."
+  description = "Enable Terraform-driven Vault resources only after Vault initialization/unseal and deployment-trust bootstrap (bootstrap-vault.sh)."
   type        = bool
   default     = false
 }
 
 variable "vault_address" {
-  description = "TLS Vault address reachable from the HCP Terraform agent."
+  description = "In-cluster TLS Vault address recorded in outputs and descriptors."
   type        = string
   default     = "https://vault.vault.svc.cluster.local:8200"
 

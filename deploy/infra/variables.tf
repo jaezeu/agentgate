@@ -65,7 +65,7 @@ variable "kubernetes_version" {
 }
 
 variable "cluster_endpoint_public_access_cidrs" {
-  description = "Narrow IPv4 CIDRs allowed to reach the public EKS API endpoint, including the HCP agent egress CIDR."
+  description = "IPv4 CIDRs allowed to reach the public EKS API endpoint. Keep this to operator egress /32s unless GitHub-hosted runners must apply cluster-touching roots."
   type        = list(string)
 
   validation {
@@ -73,11 +73,24 @@ variable "cluster_endpoint_public_access_cidrs" {
       length(var.cluster_endpoint_public_access_cidrs) > 0 &&
       alltrue([
         for cidr in var.cluster_endpoint_public_access_cidrs :
-        can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"
-      ])
+        can(cidrnetmask(cidr))
+      ]) &&
+      (
+        var.allow_public_cluster_endpoint ||
+        alltrue([
+          for cidr in var.cluster_endpoint_public_access_cidrs :
+          cidr != "0.0.0.0/0"
+        ])
+      )
     )
-    error_message = "Provide at least one valid, narrow IPv4 CIDR; 0.0.0.0/0 is prohibited."
+    error_message = "Provide valid IPv4 CIDRs; 0.0.0.0/0 additionally requires allow_public_cluster_endpoint=true."
   }
+}
+
+variable "allow_public_cluster_endpoint" {
+  description = "Explicitly acknowledge an IAM-authenticated but network-open EKS endpoint (0.0.0.0/0), required when GitHub-hosted runners apply the platform and agentgate roots."
+  type        = bool
+  default     = false
 }
 
 variable "node_instance_types" {
@@ -113,57 +126,13 @@ variable "node_disk_size_gib" {
   }
 }
 
-variable "hcp_terraform_organization" {
-  description = "HCP Terraform organization used in workload identity subject restrictions."
+variable "deployer_role_arn" {
+  description = "IAM role that runs Terraform for this sandbox (the GitHub Actions deployer from deploy/bootstrap); it receives EKS cluster-admin access."
   type        = string
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,39}$", var.hcp_terraform_organization))
-    error_message = "hcp_terraform_organization must be 3-40 valid HCP Terraform organization characters."
-  }
-}
-
-variable "hcp_terraform_project" {
-  description = "HCP Terraform project used in workload identity subject restrictions."
-  type        = string
-  default     = "AgentGate Sandbox"
-
-  validation {
-    condition     = length(trimspace(var.hcp_terraform_project)) >= 3
-    error_message = "hcp_terraform_project must not be empty."
-  }
-}
-
-variable "hcp_terraform_platform_workspace" {
-  description = "HCP Terraform workspace allowed to assume the platform run role."
-  type        = string
-  default     = "agentgate-platform"
-}
-
-variable "hcp_terraform_agentgate_workspace" {
-  description = "HCP Terraform workspace allowed to assume the AgentGate run role."
-  type        = string
-  default     = "agentgate-agentgate"
-}
-
-variable "hcp_aws_oidc_provider_arn" {
-  description = "Pre-provisioned AWS IAM OIDC provider ARN for app.terraform.io. This is trust metadata, not a credential."
-  type        = string
-
-  validation {
-    condition     = can(regex("^arn:[^:]+:iam::[0-9]{12}:oidc-provider/app\\.terraform\\.io$", var.hcp_aws_oidc_provider_arn))
-    error_message = "hcp_aws_oidc_provider_arn must identify the app.terraform.io IAM OIDC provider."
-  }
-}
-
-variable "hcp_aws_workload_identity_audience" {
-  description = "Audience configured for HCP Terraform AWS dynamic provider credentials."
-  type        = string
-  default     = "aws.workload.identity"
-
-  validation {
-    condition     = var.hcp_aws_workload_identity_audience == "aws.workload.identity"
-    error_message = "The reviewed HCP Terraform AWS workload identity audience is aws.workload.identity."
+    condition     = can(regex("^arn:[^:]+:iam::[0-9]{12}:role/.+$", var.deployer_role_arn))
+    error_message = "deployer_role_arn must be an IAM role ARN."
   }
 }
 

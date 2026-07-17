@@ -1,23 +1,21 @@
-variable "hcp_terraform_organization" {
-  description = "HCP Terraform organization containing the sandbox workspaces."
+variable "state_bucket" {
+  description = "S3 bucket created by deploy/bootstrap that holds every root's Terraform state."
   type        = string
 
   validation {
-    condition     = length(trimspace(var.hcp_terraform_organization)) >= 3
-    error_message = "hcp_terraform_organization must not be empty."
+    condition     = can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.state_bucket))
+    error_message = "state_bucket must be a valid S3 bucket name."
   }
 }
 
-variable "infra_workspace_name" {
-  description = "HCP Terraform workspace that owns deploy/infra."
+variable "state_bucket_region" {
+  description = "AWS region of the Terraform state bucket."
   type        = string
-  default     = "agentgate-infra"
-}
 
-variable "platform_workspace_name" {
-  description = "HCP Terraform workspace that owns deploy/platform."
-  type        = string
-  default     = "agentgate-platform"
+  validation {
+    condition     = can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$", var.state_bucket_region))
+    error_message = "state_bucket_region must be a valid AWS region name."
+  }
 }
 
 variable "cluster_domain" {
@@ -86,7 +84,7 @@ variable "application_image" {
   description = "Published AgentGate image built from deploy/images/Dockerfile and pinned by sha256 digest."
   type        = string
 
-  # TODO(verify): publish the reviewed application image and record its immutable registry digest in the HCP workspace.
+  # TODO(verify): publish the reviewed application image and record its immutable registry digest in the deployment variables.
   validation {
     condition     = can(regex("^[^[:space:]@]+@sha256:[0-9a-f]{64}$", var.application_image))
     error_message = "application_image must be an immutable OCI reference ending in @sha256:<64 lowercase hex characters>."

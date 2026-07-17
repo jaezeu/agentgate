@@ -242,9 +242,6 @@ server:
           - namespaceSelector:
               matchLabels:
                 kubernetes.io/metadata.name: agentgate-sandbox
-          - namespaceSelector:
-              matchLabels:
-                kubernetes.io/metadata.name: hcp-terraform-agent
         ports:
           - port: 8200
             protocol: TCP

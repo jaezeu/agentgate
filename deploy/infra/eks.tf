@@ -1,248 +1,142 @@
-data "aws_iam_policy_document" "eks_cluster_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    effect  = "Allow"
+locals {
+  eks_admin_policy_arn = "arn:${data.aws_partition.current.partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
-    principals {
-      identifiers = ["eks.amazonaws.com"]
-      type        = "Service"
+  # EKS access entries for the identities that operate this sandbox. The
+  # deployer role (created by deploy/bootstrap and assumed by GitHub Actions
+  # through OIDC, or by an operator applying locally) needs cluster-admin so
+  # the platform and agentgate roots can manage in-cluster resources.
+  cluster_admin_access_entries = merge(
+    {
+      deployer = {
+        principal_arn = var.deployer_role_arn
+      }
+    },
+    {
+      for arn in var.operator_access_principal_arns :
+      "operator-${substr(sha1(arn), 0, 8)}" => {
+        principal_arn = arn
+      }
+    },
+  )
+}
+
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 21.24"
+
+  name               = local.cluster_name
+  kubernetes_version = var.kubernetes_version
+
+  vpc_id                   = module.vpc.vpc_id
+  subnet_ids               = module.vpc.private_subnets
+  control_plane_subnet_ids = concat(module.vpc.private_subnets, module.vpc.public_subnets)
+
+  endpoint_private_access      = true
+  endpoint_public_access       = true
+  endpoint_public_access_cidrs = var.cluster_endpoint_public_access_cidrs
+
+  authentication_mode                      = "API"
+  enable_cluster_creator_admin_permissions = false
+
+  access_entries = {
+    for key, entry in local.cluster_admin_access_entries :
+    key => {
+      principal_arn = entry.principal_arn
+      policy_associations = {
+        cluster_admin = {
+          policy_arn   = local.eks_admin_policy_arn
+          access_scope = { type = "cluster" }
+        }
+      }
     }
   }
-}
 
-resource "aws_iam_role" "eks_cluster" {
-  name               = "${var.name_prefix}-eks-cluster"
-  assume_role_policy = data.aws_iam_policy_document.eks_cluster_assume.json
-}
-
-resource "aws_iam_role_policy_attachment" "eks_cluster" {
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEKSClusterPolicy"
-  role       = aws_iam_role.eks_cluster.name
-}
-
-data "aws_iam_policy_document" "eks_secrets_key" {
-  statement {
-    actions   = ["kms:*"]
-    effect    = "Allow"
-    resources = ["*"]
-
-    principals {
-      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
-      type        = "AWS"
-    }
-  }
-
-  statement {
-    actions = [
-      "kms:CreateGrant",
-      "kms:Decrypt",
-      "kms:DescribeKey",
-      "kms:Encrypt",
-      "kms:GenerateDataKey*",
-      "kms:ListGrants",
-      "kms:ReEncrypt*",
-    ]
-    effect    = "Allow"
-    resources = ["*"]
-
-    principals {
-      identifiers = [aws_iam_role.eks_cluster.arn]
-      type        = "AWS"
-    }
-
-    condition {
-      test     = "Bool"
-      values   = ["true"]
-      variable = "kms:GrantIsForAWSResource"
-    }
-  }
-}
-
-resource "aws_kms_key" "eks_secrets" {
-  description             = "Envelope encryption for ${local.cluster_name} Kubernetes secrets"
-  deletion_window_in_days = 7
-  enable_key_rotation     = true
-  policy                  = data.aws_iam_policy_document.eks_secrets_key.json
-
-  tags = {
-    Name = "${var.name_prefix}-eks-secrets"
-  }
-}
-
-resource "aws_kms_alias" "eks_secrets" {
-  name          = "alias/${var.name_prefix}-eks-secrets"
-  target_key_id = aws_kms_key.eks_secrets.key_id
-}
-
-resource "aws_cloudwatch_log_group" "eks" {
-  name              = "/aws/eks/${local.cluster_name}/cluster"
-  retention_in_days = 14
-}
-
-resource "aws_eks_cluster" "sandbox" {
-  name     = local.cluster_name
-  role_arn = aws_iam_role.eks_cluster.arn
-  version  = var.kubernetes_version
-
-  access_config {
-    authentication_mode                         = "API"
-    bootstrap_cluster_creator_admin_permissions = false
-  }
-
-  enabled_cluster_log_types = [
+  enabled_log_types = [
     "api",
     "audit",
     "authenticator",
     "controllerManager",
     "scheduler",
   ]
+  cloudwatch_log_group_retention_in_days = 14
 
-  encryption_config {
-    provider {
-      key_arn = aws_kms_key.eks_secrets.arn
+  create_kms_key                  = true
+  kms_key_deletion_window_in_days = 7
+  encryption_config               = { resources = ["secrets"] }
+
+  service_ipv4_cidr = "172.20.0.0/16"
+  upgrade_policy    = { support_type = "STANDARD" }
+
+  enable_irsa = true
+
+  addons = {
+    vpc-cni = {
+      addon_version               = "v1.22.3-eksbuild.1"
+      most_recent                 = false
+      before_compute              = true
+      configuration_values        = jsonencode({ enableNetworkPolicy = "true" })
+      service_account_role_arn    = aws_iam_role.vpc_cni.arn
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "PRESERVE"
     }
-    resources = ["secrets"]
-  }
-
-  kubernetes_network_config {
-    ip_family         = "ipv4"
-    service_ipv4_cidr = "172.20.0.0/16"
-  }
-
-  upgrade_policy {
-    support_type = "STANDARD"
-  }
-
-  vpc_config {
-    endpoint_private_access = true
-    endpoint_public_access  = true
-    public_access_cidrs     = var.cluster_endpoint_public_access_cidrs
-    subnet_ids              = concat(aws_subnet.private[*].id, aws_subnet.public[*].id)
-  }
-
-  depends_on = [
-    aws_cloudwatch_log_group.eks,
-    aws_iam_role_policy_attachment.eks_cluster,
-  ]
-
-  tags = {
-    Name = local.cluster_name
-  }
-}
-
-data "tls_certificate" "eks_oidc" {
-  url = aws_eks_cluster.sandbox.identity[0].oidc[0].issuer
-}
-
-resource "aws_iam_openid_connect_provider" "eks" {
-  client_id_list = ["sts.amazonaws.com"]
-  thumbprint_list = [
-    data.tls_certificate.eks_oidc.certificates[length(data.tls_certificate.eks_oidc.certificates) - 1].sha1_fingerprint,
-  ]
-  url = aws_eks_cluster.sandbox.identity[0].oidc[0].issuer
-
-  tags = {
-    Name = "${var.name_prefix}-eks"
-  }
-}
-
-data "aws_iam_policy_document" "node_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    effect  = "Allow"
-
-    principals {
-      identifiers = ["ec2.amazonaws.com"]
-      type        = "Service"
+    coredns = {
+      addon_version               = "v1.14.3-eksbuild.3"
+      most_recent                 = false
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "PRESERVE"
     }
-  }
-}
-
-resource "aws_iam_role" "node" {
-  name               = "${var.name_prefix}-eks-node"
-  assume_role_policy = data.aws_iam_policy_document.node_assume.json
-}
-
-resource "aws_iam_role_policy_attachment" "node_worker" {
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  role       = aws_iam_role.node.name
-}
-
-resource "aws_iam_role_policy_attachment" "node_ecr" {
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
-  role       = aws_iam_role.node.name
-}
-
-resource "aws_launch_template" "node" {
-  name_prefix            = "${var.name_prefix}-node-"
-  update_default_version = true
-
-  block_device_mappings {
-    device_name = "/dev/xvda"
-
-    ebs {
-      delete_on_termination = true
-      encrypted             = true
-      volume_size           = var.node_disk_size_gib
-      volume_type           = "gp3"
+    kube-proxy = {
+      addon_version               = "v1.36.0-eksbuild.9"
+      most_recent                 = false
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "PRESERVE"
+    }
+    aws-ebs-csi-driver = {
+      # TODO(verify): confirm v1.62.0-eksbuild.1 is offered for EKS 1.36 in the operator's region; AWS does not publish a static compatibility table for this add-on.
+      addon_version               = "v1.62.0-eksbuild.1"
+      most_recent                 = false
+      service_account_role_arn    = aws_iam_role.ebs_csi.arn
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "PRESERVE"
     }
   }
 
-  metadata_options {
-    http_endpoint               = "enabled"
-    http_protocol_ipv6          = "disabled"
-    http_put_response_hop_limit = 1
-    http_tokens                 = "required"
-    instance_metadata_tags      = "disabled"
-  }
+  eks_managed_node_groups = {
+    workers = {
+      name            = "${var.name_prefix}-workers"
+      use_name_prefix = false
 
-  tag_specifications {
-    resource_type = "instance"
-    tags = merge(local.common_tags, {
-      Name = "${var.name_prefix}-node"
-    })
-  }
+      instance_types = var.node_instance_types
+      ami_type       = "AL2023_x86_64_STANDARD"
+      capacity_type  = "ON_DEMAND"
 
-  tag_specifications {
-    resource_type = "volume"
-    tags = merge(local.common_tags, {
-      Name = "${var.name_prefix}-node"
-    })
-  }
-}
+      min_size     = 2
+      max_size     = 2
+      desired_size = var.node_desired_size
 
-resource "aws_eks_node_group" "sandbox" {
-  ami_type        = "AL2023_x86_64_STANDARD"
-  capacity_type   = "ON_DEMAND"
-  cluster_name    = aws_eks_cluster.sandbox.name
-  instance_types  = var.node_instance_types
-  node_group_name = "${var.name_prefix}-workers"
-  node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = aws_subnet.private[*].id
-  version         = var.kubernetes_version
+      block_device_mappings = {
+        xvda = {
+          device_name = "/dev/xvda"
+          ebs = {
+            delete_on_termination = true
+            encrypted             = true
+            volume_size           = var.node_disk_size_gib
+            volume_type           = "gp3"
+          }
+        }
+      }
 
-  launch_template {
-    id      = aws_launch_template.node.id
-    version = aws_launch_template.node.latest_version
-  }
+      metadata_options = {
+        http_endpoint               = "enabled"
+        http_protocol_ipv6          = "disabled"
+        http_put_response_hop_limit = 1
+        http_tokens                 = "required"
+        instance_metadata_tags      = "disabled"
+      }
 
-  scaling_config {
-    desired_size = var.node_desired_size
-    max_size     = 2
-    min_size     = 2
-  }
-
-  update_config {
-    max_unavailable = 1
-  }
-
-  depends_on = [
-    aws_eks_addon.vpc_cni,
-    aws_iam_role_policy_attachment.node_ecr,
-    aws_iam_role_policy_attachment.node_worker,
-  ]
-
-  tags = {
-    Name = "${var.name_prefix}-workers"
+      update_config = {
+        max_unavailable = 1
+      }
+    }
   }
 }

@@ -27,7 +27,7 @@ By the end, students should be able to explain and demonstrate:
 
 ## Safety, cost, and handling rules
 
-- Use only the dedicated sandbox account. EKS, nodes, NAT, EBS, logs, and HCP
+- Use only the dedicated sandbox account. EKS, nodes, NAT, EBS, logs, and
   Terraform can incur charges. Destroy or explicitly hand off the sandbox.
 - Never paste a JWT-SVID, Vault token, AWS access key, secret key, session token,
   unseal key, dispatcher private key, or approver token into a host shell,
@@ -850,11 +850,11 @@ stating that already issued STS values can remain valid until expiry.
 Choose exactly one end state:
 
 1. **Destroy:** follow [Reverse destroy](DEPLOY.md#reverse-destroy) while the
-   cluster, HCP agent, Vault material, AWS SSO session, and HCP token are still
-   available.
-2. **Handoff:** record the named owner, AWS account, HCP organization, current
-   cost window, Vault unseal-material custodian, and an explicit destruction
-   deadline. The owner acknowledges that the sandbox is still billing.
+   cluster, Vault material, and AWS SSO session are still available.
+2. **Handoff:** record the named owner, AWS account, GitHub repository and
+   environments, current cost window, Vault unseal-material custodian, and an
+   explicit destruction deadline. The owner acknowledges that the sandbox is
+   still billing.
 
 Stop both port-forwards. If the disposable Vault root token was retained for the
 lab, revoke it now using the protected-file procedure in `DEPLOY.md`.

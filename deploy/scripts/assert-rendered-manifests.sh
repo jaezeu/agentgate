@@ -57,8 +57,8 @@ grep -q 'pid_file_name = "/vault/tls/vault.pid"' "${vault_terraform}" ||
   die "Vault daemon SPIFFE Helper configuration does not signal the Vault PID"
 grep -q 'kubernetes.io/metadata.name: agentgate-sandbox' "${vault_manifest}" ||
   die "Vault ingress does not include the exact runner namespace"
-grep -q 'kubernetes.io/metadata.name: hcp-terraform-agent' "${vault_manifest}" ||
-  die "Vault ingress does not include the HCP agent namespace"
+! grep -q 'kubernetes.io/metadata.name: hcp-terraform-agent' "${vault_manifest}" ||
+  die "Vault ingress still includes the removed HCP agent namespace"
 [[ "$(grep -c -- '- name: home' "${vault_manifest}")" -eq 2 ]] ||
   die "Vault render has an unexpected duplicate or missing home volume/mount"
 grep -q 'readOnlyRootFilesystem: true' "${vault_manifest}" ||

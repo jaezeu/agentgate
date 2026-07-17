@@ -14,30 +14,67 @@
 
 > **Cost warning:** EKS control-plane hours, two `t3.medium` nodes, one NAT
 > gateway, public IPv4 addresses, EBS volumes, data transfer, CloudWatch logs,
-> and HCP Terraform agent usage can all incur charges. Load balancers would add
-> cost if introduced later. Review current AWS and HCP pricing before apply.
+> and the state-bucket KMS key can all incur charges. Load balancers would add
+> cost if introduced later. Review current AWS pricing before apply.
 > **Destroy the sandbox when idle.**
 
 ## What is deployed
 
-There are exactly three independent Terraform roots:
+There are exactly four independent Terraform roots:
 
-1. `deploy/infra`
-2. `deploy/platform`
-3. `deploy/agentgate`
+1. `deploy/bootstrap` — state bucket and GitHub OIDC deployment trust
+2. `deploy/infra`
+3. `deploy/platform`
+4. `deploy/agentgate`
 
-Apply in that order. Destroy in the exact reverse order. The roots use fixed
-HCP Terraform workspace names:
+Apply in that order. Destroy in the exact reverse order. State for the three
+sandbox roots lives in one S3 bucket with native lock files:
 
-| Root | Workspace | Execution |
+| Root | State | Execution |
 | --- | --- | --- |
-| `deploy/infra` | `agentgate-infra` | HCP remote execution |
-| `deploy/platform` | `agentgate-platform` | In-cluster HCP agent |
-| `deploy/agentgate` | `agentgate-agentgate` | In-cluster HCP agent |
+| `deploy/bootstrap` | Local file kept with operator bootstrap material | Operator only |
+| `deploy/infra` | `s3://<state-bucket>/infra.tfstate` | Operator (AWS SSO) or GitHub Actions OIDC |
+| `deploy/platform` | `s3://<state-bucket>/platform.tfstate` | Operator or GitHub Actions OIDC |
+| `deploy/agentgate` | `s3://<state-bucket>/agentgate.tfstate` | Operator or GitHub Actions OIDC |
 
-The infrastructure workspace creates the narrowly trusted run roles for the
-two downstream workspaces. The initial infrastructure run role and the AWS
-OIDC provider for `app.terraform.io` are account bootstrap prerequisites.
+The bootstrap root creates the versioned, KMS-encrypted state bucket, the
+`token.actions.githubusercontent.com` IAM OIDC provider, and one deployer
+role trusted only for this repository's `sandbox-plan` and `sandbox` GitHub
+environments. See
+[ADR-0001](adr/0001-deployment-control-plane.md) for the decision record.
+
+## Deployment pipeline
+
+```mermaid
+flowchart LR
+    subgraph GitHub
+        W[deploy.yml workflow] -->|OIDC id-token| E{environment}
+        E -->|sandbox-plan| P[plan]
+        E -->|sandbox, protected| A[apply]
+        D[scheduled drift plan] --> P
+    end
+
+    subgraph AWS[AWS sandbox account]
+        R[Deployer IAM role]
+        S[(S3 state bucket
+KMS + versioning + lockfile)]
+        K[EKS cluster]
+    end
+
+    O[Operator with AWS SSO] -->|same backend| S
+    P & A -->|AssumeRoleWithWebIdentity| R
+    R --> S
+    R -->|infra root: AWS APIs| K
+    A -->|platform root: kubectl port-forward| V[In-cluster Vault]
+    V -->|jwt-deployer login, 15m token| A
+```
+
+Local applies and CI applies share the same state and the same identity
+model: no static cloud or Vault credential exists anywhere. GitHub-hosted
+runners need EKS API network access for the platform and agentgate roots;
+either allow `0.0.0.0/0` explicitly (`allow_public_cluster_endpoint=true`,
+IAM still authenticates every request) or run those roots from the operator
+environment.
 
 AgentGate is a credential-blind control plane:
 
@@ -74,13 +111,23 @@ All links in this section were checked on **2026-07-17**.
 
 ### Terraform and providers
 
-| Component | Pin | Official contract checked |
+Providers and community modules use pessimistic (`~>`) constraints; the
+committed `.terraform.lock.hcl` in each root pins the exact provider versions
+in use (dual-platform hashes) until `terraform init -upgrade` is run
+deliberately. Community modules from `terraform-aws-modules` replace the
+hand-rolled VPC, EKS, state-bucket, and state-KMS resources.
+
+| Component | Constraint | Official contract checked |
 | --- | --- | --- |
-| Terraform | `1.15.6` | [CLI releases](https://releases.hashicorp.com/terraform/1.15.6/), [HCP `cloud` block](https://developer.hashicorp.com/terraform/language/terraform#cloud) |
-| AWS provider | `6.55.0` | [Provider release](https://github.com/hashicorp/terraform-provider-aws/releases/tag/v6.55.0), [resource docs at tag](https://github.com/hashicorp/terraform-provider-aws/tree/v6.55.0/website/docs) |
-| Kubernetes provider | `3.2.1` | [Provider release](https://github.com/hashicorp/terraform-provider-kubernetes/releases/tag/v3.2.1), [resource docs at tag](https://github.com/hashicorp/terraform-provider-kubernetes/tree/v3.2.1/docs/resources) |
-| Helm provider | `3.2.0` | [Provider release](https://github.com/hashicorp/terraform-provider-helm/releases/tag/v3.2.0), [`helm_release`](https://registry.terraform.io/providers/hashicorp/helm/3.2.0/docs/resources/release) |
-| Vault provider | `5.10.1` | [Provider release](https://github.com/hashicorp/terraform-provider-vault/releases/tag/v5.10.1), [resource docs at tag](https://github.com/hashicorp/terraform-provider-vault/tree/v5.10.1/docs/resources) |
+| Terraform | `~> 1.15.6` (CLI `1.15.6`) | [CLI releases](https://releases.hashicorp.com/terraform/1.15.6/), [S3 backend](https://developer.hashicorp.com/terraform/language/backend/s3) |
+| AWS provider | `~> 6.55` | [Provider releases](https://github.com/hashicorp/terraform-provider-aws/releases) |
+| Kubernetes provider | `~> 3.2` | [Provider releases](https://github.com/hashicorp/terraform-provider-kubernetes/releases) |
+| Helm provider | `~> 3.2` | [Provider releases](https://github.com/hashicorp/terraform-provider-helm/releases) |
+| `terraform-aws-modules/vpc` | `~> 6.6` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws) |
+| `terraform-aws-modules/eks` | `~> 21.24` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws) |
+| `terraform-aws-modules/s3-bucket` | `~> 5.14` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/s3-bucket/aws) |
+| `terraform-aws-modules/kms` | `~> 4.2` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/kms/aws) |
+| Vault provider | `~> 5.10` | [Provider release](https://github.com/hashicorp/terraform-provider-vault/releases/tag/v5.10.1), [resource docs at tag](https://github.com/hashicorp/terraform-provider-vault/tree/v5.10.1/docs/resources) |
 | TLS provider | `4.3.0` | [Provider release](https://github.com/hashicorp/terraform-provider-tls/releases/tag/v4.3.0), [`tls_certificate`](https://registry.terraform.io/providers/hashicorp/tls/4.3.0/docs/data-sources/certificate) |
 
 AWS arguments were checked against the `vpc`, `subnet`, `internet_gateway`,
@@ -140,9 +187,7 @@ Vault provider arguments were checked against `vault_audit`,
 | PostgreSQL image | digest `sha256:db2312d9b243afa8c3b3f5496e478d17d0dff9791d06f3b93b9567abd86ae92f` | [Bitnami PostgreSQL container](https://github.com/bitnami/containers/tree/main/bitnami/postgresql) |
 | Go builder | `1.24.13-alpine3.23@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191` | [Go downloads](https://go.dev/dl/#go1.24.13), [Docker Official Image](https://hub.docker.com/_/golang) |
 | Distroless runtime | `static-debian13:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6` | [Distroless repository](https://github.com/GoogleContainerTools/distroless) |
-| HCP Terraform agent | `1.29.0`, amd64 digest `sha256:d53f16c18643e645eae1a6677396ccba5466e2251625e7b08171e7662fad12d8` | [Agent docs](https://developer.hashicorp.com/terraform/cloud-docs/agents/agents), [agent changelog](https://developer.hashicorp.com/terraform/cloud-docs/agents/changelog) |
-| AWS CLI in custom agent | `2.36.1`, amd64 digest `sha256:e492f7fa148e6cd31ca40ff584b222b7b5fd5554c952d3855d47f220b7fbd0bc` | [AWS CLI v2 changelog](https://github.com/aws/aws-cli/blob/v2/CHANGELOG.rst), [official container use](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-docker.html) |
-| kubectl in custom agent | `1.36.1`, amd64 digest `sha256:4247b6241dbcb173a6cc76297b9ada8867e0518ab97cd4abb26123b7965c2730` | [kubectl install docs](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/), [official image registry](https://console.cloud.google.com/gcr/images/k8s-artifacts-prod/us/kubectl) |
+| kubectl in deploy workflow | `1.36.1`, linux/amd64 sha256 `629d3f410e09bf49b64ae7079f7f0bda1191efed311f7d37fdbab0ad5b0ec2b7` | [kubectl install docs](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/), [release binaries](https://dl.k8s.io/release/v1.36.1/bin/linux/amd64/) |
 
 The SPIRE umbrella chart advertises app version `1.14.5`, while its packaged
 component charts select `1.15.1`. The values file explicitly pins each SPIRE
@@ -157,22 +202,21 @@ Helper writes renewed certificate and key files separately; AgentGate therefore
 reloads only a matching pair and retains the last unexpired valid pair during
 that short write window. `cmd/agentgate/serve_tls_test.go` covers this behavior.
 
-### HCP Terraform and CI
+### State backend and CI
 
-- [HCP AWS dynamic provider credentials](https://developer.hashicorp.com/terraform/cloud-docs/dynamic-provider-credentials/aws-configuration)
-- [HCP Vault dynamic provider credentials](https://developer.hashicorp.com/terraform/cloud-docs/dynamic-provider-credentials/vault-configuration)
-- [HCP workspace API](https://developer.hashicorp.com/terraform/cloud-docs/api-docs/workspaces)
-- [HCP project API](https://developer.hashicorp.com/terraform/cloud-docs/api-docs/projects)
-- [HCP agents](https://developer.hashicorp.com/terraform/cloud-docs/agents/agents)
-- [Terraform remote state backend](https://developer.hashicorp.com/terraform/language/backend/remote)
+- [Terraform S3 backend and native state locking](https://developer.hashicorp.com/terraform/language/backend/s3)
+- [GitHub OIDC with AWS](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services)
+- [GitHub Actions environments and required reviewers](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+- [Vault JWT auth method](https://developer.hashicorp.com/vault/docs/auth/jwt)
+- [Terraform remote state data source](https://developer.hashicorp.com/terraform/language/state/remote-state-data)
 
 The committed dependency locks include package hashes for the Apple Silicon
-development environment and the Linux amd64 CI/HCP agent environment. Whenever
-a provider pin changes, regenerate every root with both platforms before using
+development environment and the Linux amd64 CI environment. Whenever a
+provider pin changes, regenerate every root with both platforms before using
 `-lockfile=readonly`:
 
 ```bash
-for root in infra platform agentgate; do
+for root in bootstrap infra platform agentgate; do
   terraform -chdir="deploy/${root}" providers lock \
     -platform=darwin_arm64 \
     -platform=linux_amd64
@@ -185,7 +229,8 @@ on the other platform.
 
 CI actions are immutable commit pins: checkout `v4.3.1`, setup-node `v4.4.0`,
 setup-go `v5.6.0`, golangci-lint-action `v8.0.0`, setup-opa `v2.4.0`,
-setup-terraform `v4.0.1`, setup-helm `v4.3.1`, and action-shellcheck `2.0.0`.
+setup-terraform `v4.0.1`, setup-helm `v4.3.1`, action-shellcheck `2.0.0`, and
+configure-aws-credentials `v5.1.1`.
 Their release pages and action inputs were checked in their official GitHub
 repositories: [checkout](https://github.com/actions/checkout/releases/tag/v4.3.1),
 [setup-node](https://github.com/actions/setup-node/releases/tag/v4.4.0),
@@ -193,8 +238,9 @@ repositories: [checkout](https://github.com/actions/checkout/releases/tag/v4.3.1
 [golangci-lint-action](https://github.com/golangci/golangci-lint-action/releases/tag/v8.0.0),
 [setup-opa](https://github.com/open-policy-agent/setup-opa/releases/tag/v2.4.0),
 [setup-terraform](https://github.com/hashicorp/setup-terraform/releases/tag/v4.0.1),
-[setup-helm](https://github.com/Azure/setup-helm/releases/tag/v4.3.1), and
-[action-shellcheck](https://github.com/ludeeus/action-shellcheck/releases/tag/2.0.0).
+[setup-helm](https://github.com/Azure/setup-helm/releases/tag/v4.3.1),
+[action-shellcheck](https://github.com/ludeeus/action-shellcheck/releases/tag/2.0.0), and
+[configure-aws-credentials](https://github.com/aws-actions/configure-aws-credentials/releases/tag/v5.1.1).
 
 ## Prerequisites
 
@@ -204,9 +250,9 @@ shared production account.
 Required:
 
 - AWS sandbox account and an AWS SSO role for the human operator;
-- HCP Terraform organization with permission to create projects, workspaces,
-  agent pools, tokens, variables, and remote-state consumers;
-- an OCI registry for two locally built images;
+- a GitHub repository (this one or a fork) if CI-driven deploys and drift
+  detection are wanted; local-only operation needs no GitHub setup;
+- an OCI registry for the locally built application image;
 - one HTTPS, Slack-compatible approval webhook endpoint for the sandbox;
 - Terraform `1.15.6`;
 - AWS CLI v2;
@@ -219,8 +265,6 @@ Required:
 Set non-secret context:
 
 ```bash
-export TF_CLOUD_ORGANIZATION='replace-me'
-export HCP_TERRAFORM_PROJECT='AgentGate Sandbox'
 export AGENTGATE_AWS_ACCOUNT_ID='111122223333'
 export AGENTGATE_AWS_REGION='us-west-2'
 export AGENTGATE_CLUSTER_NAME='agentgate-sandbox-eks'
@@ -229,6 +273,8 @@ export AGENTGATE_ACKNOWLEDGE_COSTS='yes'
 mkdir -p "${AGENTGATE_SECRET_DIR}"
 chmod 0700 "${AGENTGATE_SECRET_DIR}"
 ```
+
+`AGENTGATE_STATE_BUCKET` is exported after the bootstrap apply below.
 
 Expected: no command prints credential material. The secret directory mode is
 `drwx------`.
@@ -252,126 +298,99 @@ Expected shape:
 The ARN must be the expected human SSO role. The account must match
 `AGENTGATE_AWS_ACCOUNT_ID`.
 
-Authenticate the Terraform CLI without copying the token into repository
-files or shell history:
-
-```bash
-terraform login app.terraform.io
-```
-
-Expected: Terraform confirms that it saved credentials in the user's local
-Terraform CLI credentials file.
-
 Prove that static AWS variables are absent:
 
 ```bash
 test -z "${AWS_ACCESS_KEY_ID:-}"
 test -z "${AWS_SECRET_ACCESS_KEY:-}"
 test -z "${AWS_SESSION_TOKEN:-}"
+```
+
+`deploy/scripts/preflight.sh --local` runs after the bootstrap apply exports
+the state bucket name.
+
+## Bootstrap the state backend and deployment trust
+
+The bootstrap root creates the S3 state bucket (versioned, KMS-encrypted,
+public access blocked, TLS-only, native lock files), the GitHub Actions IAM
+OIDC provider, and one deployer role trusted only for this repository's
+`sandbox-plan` and `sandbox` GitHub environments. It deliberately keeps local
+state because it creates the backend everything else uses; the state file
+contains only public identifiers. Keep it with the operator bootstrap
+material.
+
+```bash
+terraform -chdir=deploy/bootstrap init -input=false
+terraform -chdir=deploy/bootstrap plan -input=false \
+  -var "aws_region=${AGENTGATE_AWS_REGION}" \
+  -var 'github_repository=replace-me/agentgate'
+terraform -chdir=deploy/bootstrap apply -input=false \
+  -var "aws_region=${AGENTGATE_AWS_REGION}" \
+  -var 'github_repository=replace-me/agentgate'
+```
+
+If the account already has a `token.actions.githubusercontent.com` OIDC
+provider, add `-var create_github_oidc_provider=false` and
+`-var existing_github_oidc_provider_arn=...`.
+
+Record the non-secret outputs and run preflight:
+
+```bash
+export AGENTGATE_STATE_BUCKET="$(
+  terraform -chdir=deploy/bootstrap output -raw state_bucket
+)"
+export AGENTGATE_DEPLOYER_ROLE_ARN="$(
+  terraform -chdir=deploy/bootstrap output -raw deployer_role_arn
+)"
+export AGENTGATE_EKS_PUBLIC_ACCESS_CIDRS='["203.0.113.10/32"]'
+export AGENTGATE_OPERATOR_PRINCIPAL_ARNS='["arn:aws:iam::111122223333:role/replace-me-sso-role"]'
 deploy/scripts/preflight.sh --local
 ```
 
 Expected final line:
 
 ```text
-Preflight passed without static AWS credential environment variables.
-```
-
-## Bootstrap HCP Terraform and AWS trust
-
-### 1. Create the HCP AWS OIDC provider and infrastructure run role
-
-Follow the official HCP AWS dynamic credential guide linked above. The AWS
-OIDC provider URL is exactly `https://app.terraform.io`, with no trailing
-slash, and its audience is exactly `aws.workload.identity`.
-
-Create a dedicated infrastructure run role in the sandbox account. Its trust
-policy must use:
-
-```json
-{
-  "Effect": "Allow",
-  "Principal": {
-    "Federated": "arn:aws:iam::111122223333:oidc-provider/app.terraform.io"
-  },
-  "Action": "sts:AssumeRoleWithWebIdentity",
-  "Condition": {
-    "StringEquals": {
-      "app.terraform.io:aud": "aws.workload.identity"
-    },
-    "StringLike": {
-      "app.terraform.io:sub": "organization:replace-me:project:AgentGate Sandbox:workspace:agentgate-infra:run_phase:*"
-    }
-  }
-}
-```
-
-Grant that role only the account-bootstrap permissions needed by
-`deploy/infra`. A dedicated empty sandbox account may use a reviewed broad
-bootstrap policy, but never reuse the role in production or allow another HCP
-organization/workspace subject. Prefer an inline role policy (or an AWS-managed
-policy) so reverse destroy does not leave a detached customer-managed policy.
-No AWS access key belongs in HCP variables.
-
-Record non-secret ARNs:
-
-```bash
-export AGENTGATE_HCP_AWS_OIDC_PROVIDER_ARN='arn:aws:iam::111122223333:oidc-provider/app.terraform.io'
-export AGENTGATE_INFRA_RUN_ROLE_ARN='arn:aws:iam::111122223333:role/replace-me-agentgate-infra'
-export AGENTGATE_HCP_OIDC_PROVIDER_OWNERSHIP='dedicated'
-export AGENTGATE_EKS_PUBLIC_ACCESS_CIDRS='["203.0.113.10/32"]'
-export AGENTGATE_OPERATOR_PRINCIPAL_ARNS='["arn:aws:iam::111122223333:role/replace-me-sso-role"]'
+Preflight passed without static AWS credential material.
 ```
 
 Use the operator's real public egress `/32`, not the documentation address.
-`0.0.0.0/0` is rejected.
+`0.0.0.0/0` is rejected unless `allow_public_cluster_endpoint=true` is set
+deliberately for CI-driven cluster applies; the endpoint then still requires
+IAM authentication for every request.
 
-### 2. Create HCP project/workspaces
+### GitHub repository configuration (optional, for CI deploys and drift)
 
-Create a short-lived HCP user or organization token and place it only in the
-current process environment:
+In the repository settings:
 
-```bash
-read -r -s -p 'HCP Terraform token: ' TFC_TOKEN
-export TFC_TOKEN
-printf '\n'
-deploy/scripts/setup-workspaces.sh
-unset TFC_TOKEN
-```
-
-The script sends the token from a protected temporary curl configuration; it
-does not put the token in command arguments or output. It creates or reconciles
-the project and three workspaces, pins Terraform `1.15.6`, sets only dynamic
-credential references, and grants remote-state access:
-
-- infra state -> platform and AgentGate workspaces;
-- platform state -> AgentGate workspace.
-
-Expected final line:
+1. Create environment `sandbox-plan` with no protection rules and
+   environment `sandbox` with required reviewers. The deployer role trusts
+   only these two environment subjects; pull requests and pushes cannot
+   assume it.
+2. Create Actions variables:
 
 ```text
-HCP Terraform workspaces and non-secret dynamic credential references are configured.
+AGENTGATE_STATE_BUCKET            = <bootstrap output state_bucket>
+AGENTGATE_AWS_REGION              = <sandbox region>
+AGENTGATE_DEPLOYER_ROLE_ARN       = <bootstrap output deployer_role_arn>
+AGENTGATE_EKS_PUBLIC_ACCESS_CIDRS = <JSON list of allowed CIDRs>
+AGENTGATE_ALLOW_PUBLIC_CLUSTER_ENDPOINT = false
+AGENTGATE_OPERATOR_PRINCIPAL_ARNS = <JSON list, may be []>
+AGENTGATE_CLUSTER_NAME            = agentgate-sandbox-eks
+AGENTGATE_VAULT_CONFIGURED        = false
 ```
 
-In the HCP UI, verify the infrastructure workspace has:
-
-```text
-TFC_AWS_PROVIDER_AUTH = true
-TFC_AWS_RUN_ROLE_ARN = arn:aws:iam::111122223333:role/...
-```
-
-There must be no `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or
-`AWS_SESSION_TOKEN` workspace variable.
+`AGENTGATE_VAULT_CONFIGURED` flips to `true` only after the Vault bootstrap
+below; `AGENTGATE_APPLICATION_IMAGE` is added before layer 3. No variable is
+a secret; the workflow holds no static credential of any kind.
 
 ## Static validation before any plan
 
 Run exactly:
 
 ```bash
-export TF_CLOUD_ORGANIZATION='replace-me'
 terraform fmt -check -recursive deploy
 
-for root in infra platform agentgate; do
+for root in bootstrap infra platform agentgate; do
   terraform -chdir="deploy/${root}" init \
     -backend=false \
     -input=false \
@@ -382,6 +401,7 @@ done
 render_dir="$(mktemp -d)"
 deploy/scripts/render-charts.sh "${render_dir}"
 deploy/scripts/assert-agentgate-static.sh
+terraform -chdir=deploy/bootstrap test
 terraform -chdir=deploy/agentgate test
 shellcheck deploy/scripts/*.sh deploy/scripts/lib/*.sh
 rm -rf "${render_dir}"
@@ -398,6 +418,7 @@ Expected chart result:
 
 ```text
 Rendered chart manifests passed static assertions in ...
+Success! 2 passed, 0 failed.
 Success! 1 passed, 0 failed.
 ```
 
@@ -405,10 +426,14 @@ This is static evidence only.
 
 ## Apply layer 1: infrastructure
 
-Initialize the real HCP backend and inspect the plan:
+Initialize against the S3 backend, export the root's variables, and inspect
+the plan:
 
 ```bash
-terraform -chdir=deploy/infra init -input=false
+export TF_VAR_deployer_role_arn="${AGENTGATE_DEPLOYER_ROLE_ARN}"
+export TF_VAR_cluster_endpoint_public_access_cidrs="${AGENTGATE_EKS_PUBLIC_ACCESS_CIDRS}"
+export TF_VAR_operator_access_principal_arns="${AGENTGATE_OPERATOR_PRINCIPAL_ARNS}"
+deploy/scripts/init-root.sh infra
 terraform -chdir=deploy/infra plan -input=false
 ```
 
@@ -421,29 +446,24 @@ Expected plan shape includes:
 - one managed node group with desired/min/max count `2/2/2`;
 - only `t3.medium` node instances;
 - VPC CNI, CoreDNS, kube-proxy, and EBS CSI add-ons;
-- HCP platform/AgentGate run roles;
+- EKS access entries for the deployer role and operator SSO roles;
 - separate Vault broker and demo target roles;
 - one private, encrypted, versioned S3 demo bucket.
 
-Review every create action and the cost estimate. Apply only from the operator
-environment:
+Review every create action and the current pricing. Apply either from the
+operator environment or through the deploy workflow (`root=infra`,
+`action=apply`, approved in the protected `sandbox` environment):
 
 ```bash
 terraform -chdir=deploy/infra apply -input=false
 ```
 
-Expected: HCP queues a confirmation-gated apply and ends with
-`Apply complete!`. This document does not claim that result has been observed.
+Expected: the apply ends with `Apply complete!`. This document does not claim
+that result has been observed.
 
 Capture only non-secret outputs:
 
 ```bash
-export AGENTGATE_PLATFORM_RUN_ROLE_ARN="$(
-  terraform -chdir=deploy/infra output -raw platform_run_role_arn
-)"
-export AGENTGATE_AGENTGATE_RUN_ROLE_ARN="$(
-  terraform -chdir=deploy/infra output -raw agentgate_run_role_arn
-)"
 export AGENTGATE_CLUSTER_NAME="$(
   terraform -chdir=deploy/infra output -raw cluster_name
 )"
@@ -477,7 +497,7 @@ aws eks describe-addon-versions \
 Expected: the output includes `v1.62.0-eksbuild.1`. If not, stop and review a
 new pin; do not let AWS silently choose a default.
 
-## Bootstrap platform prerequisites and HCP agent
+## Bootstrap platform prerequisites
 
 Create platform namespaces and the generated PostgreSQL runtime Secrets. The
 same generated password is referenced by PostgreSQL in `agentgate-platform`
@@ -495,61 +515,6 @@ Platform namespaces and PostgreSQL runtime Secret are ready.
 
 No password is printed or stored in Terraform state.
 
-Build the custom amd64 HCP agent image. It contains pinned AWS CLI and kubectl
-because the Kubernetes/Helm providers use `aws eks get-token`:
-
-```bash
-export HCP_AGENT_REPOSITORY='ghcr.io/replace-me/agentgate-tfc-agent'
-export AGENT_TAG='tfc-agent-1.29.0-agentgate-1'
-docker build \
-  --platform linux/amd64 \
-  --file deploy/images/tfc-agent.Dockerfile \
-  --tag "${HCP_AGENT_REPOSITORY}:${AGENT_TAG}" \
-  .
-docker push "${HCP_AGENT_REPOSITORY}:${AGENT_TAG}"
-```
-
-Resolve the registry digest and set, for example:
-
-```bash
-export HCP_TERRAFORM_AGENT_IMAGE='ghcr.io/replace-me/tfc-agent-1.29.0-agentgate-1@sha256:replace-with-64-hex-digest'
-```
-
-The bootstrap script rejects a tag-only reference.
-
-In HCP Terraform, create one agent pool and one short-lived agent token. Save
-the token without echoing it:
-
-```bash
-umask 077
-read -r -s -p 'HCP agent token: ' agent_token
-printf '%s' "${agent_token}" >"${AGENTGATE_SECRET_DIR}/hcp-agent-token"
-unset agent_token
-printf '\n'
-export HCP_TERRAFORM_AGENT_TOKEN_FILE="${AGENTGATE_SECRET_DIR}/hcp-agent-token"
-deploy/scripts/bootstrap-hcp-agent.sh
-```
-
-Expected: the Deployment rolls out and the HCP UI reports one idle agent.
-Record its non-secret pool ID:
-
-```bash
-export HCP_TERRAFORM_AGENT_POOL_ID='apool-replace-me'
-```
-
-Reconcile downstream workspace roles and agent execution:
-
-```bash
-read -r -s -p 'HCP Terraform token: ' TFC_TOKEN
-export TFC_TOKEN
-deploy/scripts/setup-workspaces.sh
-unset TFC_TOKEN
-printf '\n'
-```
-
-Verify `agentgate-platform` and `agentgate-agentgate` use the selected agent
-pool. The infrastructure workspace remains remote.
-
 ## Apply layer 2: platform, first pass
 
 The first pass leaves `vault_configuration_enabled=false`. It installs
@@ -557,7 +522,9 @@ PostgreSQL, applies the forward migrations, installs SPIRE, and installs a
 sealed Vault. It does not attempt Vault provider resources.
 
 ```bash
-terraform -chdir=deploy/platform init -input=false
+export TF_VAR_state_bucket="${AGENTGATE_STATE_BUCKET}"
+export TF_VAR_state_bucket_region="${AGENTGATE_AWS_REGION}"
+deploy/scripts/init-root.sh platform
 terraform -chdir=deploy/platform plan -input=false
 terraform -chdir=deploy/platform apply -input=false
 ```
@@ -654,57 +621,55 @@ Expected:
 {"initialized":true,"sealed":false,"ha_enabled":true}
 ```
 
-Bootstrap only the exact HCP platform identity:
+Bootstrap the deployment trust inside Vault:
 
 ```bash
 export VAULT_TOKEN_FILE="${AGENTGATE_SECRET_DIR}/vault-root-token"
+export AGENTGATE_GITHUB_REPOSITORY='replace-me/agentgate'   # omit for local-only
 deploy/scripts/bootstrap-vault.sh
 ```
 
-This writes an HCP JWT auth role whose `sub` is exactly:
+This writes the `terraform-platform` policy, which manages only platform
+configuration paths and has no `aws/creds/*` path. When
+`AGENTGATE_GITHUB_REPOSITORY` is set it also enables a `jwt-deployer` JWT
+auth mount trusting GitHub's OIDC issuer with `sub` bound to exactly:
 
 ```text
-organization:<org>:project:AgentGate Sandbox:workspace:agentgate-platform:run_phase:*
+repo:<owner>/<repo>:environment:sandbox-plan
+repo:<owner>/<repo>:environment:sandbox
 ```
 
-Its policy manages only platform configuration paths; it has no
-`aws/creds/*` path.
+audience `agentgate-vault`, 15-minute tokens, and only the
+`terraform-platform` policy. No Vault credential is stored in GitHub; the
+deploy workflow exchanges its per-job OIDC identity token at run time
+(`deploy/scripts/ci-vault-env.sh`).
 
-Encode the public CA for HCP dynamic Vault credentials:
-
-```bash
-export AGENTGATE_VAULT_CA_CERT_BASE64="$(
-  openssl base64 -A -in "${AGENTGATE_SECRET_DIR}/spire-ca.pem"
-)"
-export AGENTGATE_ENABLE_HCP_VAULT_AUTH='yes'
-read -r -s -p 'HCP Terraform token: ' TFC_TOKEN
-export TFC_TOKEN
-deploy/scripts/setup-workspaces.sh
-unset TFC_TOKEN
-unset AGENTGATE_VAULT_CA_CERT_BASE64
-printf '\n'
-```
-
-The platform workspace must now contain:
+If CI deploys are wanted, flip the repository variable now:
 
 ```text
-TFC_VAULT_PROVIDER_AUTH = true
-TFC_VAULT_ADDR = https://vault.vault.svc.cluster.local:8200
-TFC_VAULT_AUTH_PATH = jwt-hcp-terraform
-TFC_VAULT_RUN_ROLE = hcp-terraform-platform
-TFC_VAULT_WORKLOAD_IDENTITY_AUDIENCE = vault.workload.identity
-TF_VAR_vault_configuration_enabled = true
+AGENTGATE_VAULT_CONFIGURED = true
 ```
-
-The CA bundle is public trust material. No Vault token is a workspace
-variable.
 
 ## Apply layer 2: Vault configuration pass
 
+Locally, mint a short-lived scoped token instead of applying with the root
+token, keep the TLS port-forward running, and apply:
+
 ```bash
+export VAULT_TOKEN="$(<"${VAULT_TOKEN_FILE}")"
+scoped_token="$(vault token create -policy=terraform-platform -ttl=30m -orphan -field=token)"
+export VAULT_TOKEN="${scoped_token}"
+unset scoped_token
+export VAULT_TLS_SERVER_NAME='vault.vault.svc.cluster.local'
+export TF_VAR_vault_configuration_enabled=true
 terraform -chdir=deploy/platform plan -input=false
 terraform -chdir=deploy/platform apply -input=false
+unset VAULT_TOKEN
 ```
+
+Through CI instead: run the deploy workflow with `root=platform` after
+setting `AGENTGATE_VAULT_CONFIGURED=true`; the workflow port-forwards Vault,
+logs in through `jwt-deployer`, and applies with the same variables.
 
 Expected additional resources:
 
@@ -760,7 +725,8 @@ unset VAULT_TOKEN
 Expected:
 
 - audit keys include `file/`;
-- auth keys include `spire-jwt/` and `jwt-hcp-terraform/`;
+- auth keys include `spire-jwt/` and, when CI trust is enabled,
+  `jwt-deployer/`;
 - secrets keys include `aws/`;
 - AgentGate's bound subject is
   `spiffe://sandbox.agentgate.test/ns/agentgate/sa/agentgate`;
@@ -769,7 +735,8 @@ Expected:
   `agentgate-policy-*` control paths;
 - it contains no `read` capability on any `aws/creds/*` path.
 
-After proving an HCP plan can authenticate dynamically, retire the initial
+After the configuration pass succeeds (and, when CI trust is enabled, a
+workflow plan has authenticated through `jwt-deployer`), retire the initial
 root token according to your recovery policy. For this disposable sandbox:
 
 ```bash
@@ -839,20 +806,17 @@ printf '\n'
 chmod 0600 "${AGENTGATE_SECRET_DIR}/approval-webhook-url"
 ```
 
-Re-run workspace setup to store only the immutable image reference:
+Expose only the immutable image reference to Terraform (and, for CI deploys,
+set the same value as the `AGENTGATE_APPLICATION_IMAGE` repository variable):
 
 ```bash
-read -r -s -p 'HCP Terraform token: ' TFC_TOKEN
-export TFC_TOKEN
-deploy/scripts/setup-workspaces.sh
-unset TFC_TOKEN
-printf '\n'
+export TF_VAR_application_image="${AGENTGATE_APPLICATION_IMAGE}"
 ```
 
 Plan and apply:
 
 ```bash
-terraform -chdir=deploy/agentgate init -input=false
+deploy/scripts/init-root.sh agentgate
 terraform -chdir=deploy/agentgate plan -input=false
 terraform -chdir=deploy/agentgate apply -input=false
 deploy/scripts/bootstrap-agentgate.sh
@@ -1341,41 +1305,57 @@ can still cause damage within legitimately granted scope.
 
 ## Reverse destroy
 
-Destroy while the cluster, HCP agent, Vault unseal material, AWS SSO session,
-and HCP token are still available.
+Destroy while the cluster, Vault unseal material, and AWS SSO session are
+still available.
 
 The script:
 
 1. destroys `agentgate`;
-2. destroys `platform`;
+2. destroys `platform` (including Vault provider resources, so the TLS
+   port-forward and a `terraform-platform` scoped token must be active);
 3. deletes retained Vault/PostgreSQL PVCs and verifies no EBS PV remains;
-4. removes bootstrap namespaces and the HCP agent;
-5. destroys `infra`;
-6. deletes the dedicated infrastructure bootstrap role and, when marked
-   dedicated, its HCP OIDC provider;
-7. deletes the three HCP workspaces and optional agent pool.
+4. removes bootstrap namespaces;
+5. destroys `infra`.
 
-Set an account-specific confirmation:
+Set an account-specific confirmation and run it:
 
 ```bash
-read -r -s -p 'HCP Terraform token: ' TFC_TOKEN
-export TFC_TOKEN
+export VAULT_TOKEN="$(vault token create -policy=terraform-platform -ttl=30m -orphan -field=token)"
 export AGENTGATE_CONFIRM_DESTROY="destroy-${AGENTGATE_AWS_ACCOUNT_ID}"
 deploy/scripts/destroy.sh
-unset TFC_TOKEN
+unset VAULT_TOKEN
 unset AGENTGATE_CONFIRM_DESTROY
-printf '\n'
 ```
 
-Expected final line:
+Expected final lines:
 
 ```text
-Reverse destroy completed: agentgate, platform, infra, then HCP workspaces.
+Reverse destroy completed: agentgate, platform, then infra.
+The state bucket, KMS key, OIDC provider, and deployer role remain.
 ```
 
 The demo S3 bucket uses sandbox-only `force_destroy=true`, including versions.
 The gp3 StorageClass uses `Delete` reclaim behavior. The script refuses to
 destroy EKS while an EBS-backed Kubernetes PV remains.
+
+Finally, remove the deployment trust and state backend. The state bucket
+must be emptied first because it is deliberately not `force_destroy`:
+
+```bash
+aws s3 rm "s3://${AGENTGATE_STATE_BUCKET}" --recursive
+aws s3api list-object-versions \
+  --bucket "${AGENTGATE_STATE_BUCKET}" \
+  --query '{Objects: [Versions,DeleteMarkers][][].{Key:Key,VersionId:VersionId}}' \
+  --output json >"${AGENTGATE_SECRET_DIR}/state-versions.json"
+jq -e '.Objects == null or (.Objects | length) == 0' \
+  "${AGENTGATE_SECRET_DIR}/state-versions.json" >/dev/null ||
+  aws s3api delete-objects \
+    --bucket "${AGENTGATE_STATE_BUCKET}" \
+    --delete "file://${AGENTGATE_SECRET_DIR}/state-versions.json"
+terraform -chdir=deploy/bootstrap destroy -input=false \
+  -var "aws_region=${AGENTGATE_AWS_REGION}" \
+  -var 'github_repository=replace-me/agentgate'
+```
 
 Verify absence:
 
@@ -1393,9 +1373,9 @@ aws resourcegroupstaggingapi get-resources \
 
 Expected: EKS returns `ResourceNotFoundException`; the tag query is empty.
 Also review EC2 Volumes, Elastic IPs, NAT Gateways, S3, IAM roles, CloudWatch
-logs, KMS keys pending deletion, HCP workspaces/agent pools, and billing. KMS
-deletion has a seven-day waiting period by design and should show as pending,
-not active infrastructure.
+logs, KMS keys pending deletion, and billing. KMS deletion has a seven-day
+waiting period by design and should show as pending, not active
+infrastructure.
 
 Securely remove local sandbox bootstrap material only after teardown evidence
 is complete:

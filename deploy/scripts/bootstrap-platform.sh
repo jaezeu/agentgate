@@ -26,7 +26,6 @@ esac
 apply_namespace "agentgate-platform" "restricted"
 apply_namespace "spire-system" "privileged"
 apply_namespace "vault" "restricted"
-apply_namespace "hcp-terraform-agent" "restricted"
 
 password_file="${secret_dir}/postgresql-password"
 tmp_dir="$(mktemp -d)"

@@ -5,8 +5,9 @@ run "static_plan" {
   command = plan
 
   variables {
-    hcp_terraform_organization = "agentgate-static-validation"
-    application_image          = "ghcr.io/example/agentgate:v0.0.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    state_bucket        = "agentgate-static-validation-tfstate"
+    state_bucket_region = "us-west-2"
+    application_image   = "ghcr.io/example/agentgate:v0.0.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
 
   override_data {

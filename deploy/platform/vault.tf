@@ -88,13 +88,6 @@ resource "helm_release" "vault" {
                     }
                   }
                 },
-                {
-                  namespaceSelector = {
-                    matchLabels = {
-                      "kubernetes.io/metadata.name" = var.hcp_agent_namespace
-                    }
-                  }
-                },
               ]
               ports = [
                 {

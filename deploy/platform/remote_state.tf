@@ -1,12 +1,10 @@
 data "terraform_remote_state" "infra" {
-  backend = "remote"
+  backend = "s3"
 
   config = {
-    hostname     = "app.terraform.io"
-    organization = var.hcp_terraform_organization
-    workspaces = {
-      name = var.infra_workspace_name
-    }
+    bucket = var.state_bucket
+    key    = "infra.tfstate"
+    region = var.state_bucket_region
   }
 }
 

@@ -185,8 +185,6 @@ jobs:
   deployment:
     name: Deployment static validation
     runs-on: ubuntu-latest
-    env:
-      TF_CLOUD_ORGANIZATION: agentgate-static-validation
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -207,7 +205,7 @@ jobs:
 
       - name: Initialize and validate Terraform roots
         run: |
-          for root in infra platform agentgate; do
+          for root in bootstrap infra platform agentgate; do
             terraform -chdir="deploy/${root}" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="deploy/${root}" validate
           done
@@ -218,6 +216,7 @@ jobs:
       - name: Assert AgentGate deployment boundaries
         run: |
           deploy/scripts/assert-agentgate-static.sh
+          terraform -chdir=deploy/bootstrap test
           terraform -chdir=deploy/agentgate test
 
       - name: Scan for static cloud credentials

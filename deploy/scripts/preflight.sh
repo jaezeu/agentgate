@@ -29,15 +29,18 @@ aws_version="$(aws --version 2>&1)"
 [[ "${aws_version}" == aws-cli/2.* ]] ||
   die "AWS CLI v2 is required; found ${aws_version%% *}"
 
-require_env TF_CLOUD_ORGANIZATION
+require_env AGENTGATE_STATE_BUCKET
 require_env AGENTGATE_AWS_ACCOUNT_ID
 require_env AGENTGATE_AWS_REGION
 require_env AGENTGATE_ACKNOWLEDGE_COSTS
 [[ "${AGENTGATE_ACKNOWLEDGE_COSTS}" == "yes" ]] ||
   die "set AGENTGATE_ACKNOWLEDGE_COSTS=yes after reviewing the cost warning in docs/DEPLOY.md"
 
-if [[ -n "${AWS_ACCESS_KEY_ID:-}" || -n "${AWS_SECRET_ACCESS_KEY:-}" || -n "${AWS_SESSION_TOKEN:-}" ]]; then
-  die "static or exported AWS credential variables are prohibited; use AWS SSO locally and HCP dynamic provider credentials for runs"
+# Long-lived static keys are prohibited everywhere. Temporary STS session
+# credentials (AWS SSO export or GitHub Actions OIDC) always carry a session
+# token; a bare access key without one is a static key.
+if [[ -n "${AWS_ACCESS_KEY_ID:-}" && -z "${AWS_SESSION_TOKEN:-}" ]]; then
+  die "static AWS access keys are prohibited; use AWS SSO locally and GitHub OIDC in CI"
 fi
 
 verify_aws_identity
@@ -48,6 +51,7 @@ fi
 
 if grep -RInE \
   '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|aws_access_key_id|aws_secret_access_key)' \
+  "${DEPLOY_ROOT}/bootstrap" \
   "${DEPLOY_ROOT}/infra" \
   "${DEPLOY_ROOT}/platform" \
   "${DEPLOY_ROOT}/agentgate" \
@@ -56,4 +60,4 @@ if grep -RInE \
   die "deployment tree contains a static AWS credential pattern"
 fi
 
-note "Preflight passed without static AWS credential environment variables."
+note "Preflight passed without static AWS credential material."

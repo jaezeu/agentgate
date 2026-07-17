@@ -10,57 +10,52 @@ output "aws_region" {
 
 output "vpc_id" {
   description = "Sandbox VPC ID."
-  value       = aws_vpc.sandbox.id
+  value       = module.vpc.vpc_id
 }
 
 output "vpc_cidr" {
   description = "Sandbox VPC CIDR used by in-cluster network policy."
-  value       = aws_vpc.sandbox.cidr_block
+  value       = module.vpc.vpc_cidr_block
 }
 
 output "cluster_service_ipv4_cidr" {
   description = "Kubernetes service CIDR used by in-cluster network policy."
-  value       = aws_eks_cluster.sandbox.kubernetes_network_config[0].service_ipv4_cidr
+  value       = module.eks.cluster_service_cidr
 }
 
 output "public_subnet_ids" {
   description = "Public subnet IDs."
-  value       = aws_subnet.public[*].id
+  value       = module.vpc.public_subnets
 }
 
 output "private_subnet_ids" {
   description = "Private EKS node subnet IDs."
-  value       = aws_subnet.private[*].id
+  value       = module.vpc.private_subnets
 }
 
 output "cluster_name" {
   description = "EKS cluster name."
-  value       = aws_eks_cluster.sandbox.name
+  value       = module.eks.cluster_name
 }
 
 output "cluster_endpoint" {
   description = "EKS API endpoint."
-  value       = aws_eks_cluster.sandbox.endpoint
+  value       = module.eks.cluster_endpoint
 }
 
 output "cluster_certificate_authority_data" {
   description = "Base64-encoded public EKS certificate authority data."
-  value       = aws_eks_cluster.sandbox.certificate_authority[0].data
+  value       = module.eks.cluster_certificate_authority_data
 }
 
 output "cluster_oidc_provider_arn" {
   description = "EKS IAM OIDC provider ARN used for IRSA."
-  value       = aws_iam_openid_connect_provider.eks.arn
+  value       = module.eks.oidc_provider_arn
 }
 
-output "platform_run_role_arn" {
-  description = "AWS role for HCP Terraform dynamic credentials in the platform workspace."
-  value       = aws_iam_role.hcp_workspace["platform"].arn
-}
-
-output "agentgate_run_role_arn" {
-  description = "AWS role for HCP Terraform dynamic credentials in the AgentGate workspace."
-  value       = aws_iam_role.hcp_workspace["agentgate"].arn
+output "deployer_role_arn" {
+  description = "Deployment role granted EKS cluster-admin access for the platform and agentgate roots."
+  value       = var.deployer_role_arn
 }
 
 output "vault_aws_broker_role_arn" {
