@@ -1,8 +1,25 @@
 # AgentGate
 
-AgentGate is a credential-blind control plane for autonomous agents that need
-narrow, short-lived cloud access. It is for platform engineers, security teams,
-and students designing governed runners in attestable infrastructure.
+**Secure infrastructure access for AI agents.** AgentGate is a SPIFFE-native,
+credential-blind access broker: it lets an AI agent running inside an attested
+workload obtain narrow, short-lived cloud access for one signed task — without
+ever holding a permanent credential, and without the broker ever touching a
+secret. It is for platform engineers, security teams, and anyone designing
+governed runners in attestable infrastructure.
+
+<p align="center">
+  <img src="docs/images/redemption-flow.svg" alt="Animated AgentGate direct-redemption flow: a human request becomes a signed grant; the attested runner presents two proofs; AgentGate authorizes and writes a one-request Vault role; the runner redeems credentials directly from Vault." width="100%">
+</p>
+
+**The problem.** Companies are letting AI agents modify Terraform, operate
+pipelines, inspect clusters, and create cloud resources — usually by
+inheriting human credentials, broad service accounts, or long-lived API keys.
+**The boundary AgentGate enforces:** SPIFFE/SPIRE proves *what is running*;
+a dispatcher-signed grant proves *what it was asked to do*; AgentGate
+authorizes the pair against default-deny policy with human approval gates;
+Vault issues the short-lived credential *directly to the workload*; the
+target platform's IAM enforces the blast radius; one `request_id` joins every
+record from the human's request to CloudTrail.
 
 An allowed request always needs two independent proofs: a SPIRE-attested
 workload identity and dispatcher-signed task context. AgentGate evaluates and
@@ -40,6 +57,22 @@ damage inside legitimately granted scope.
 A human OIDC token cannot satisfy the workload route. A workload SVID cannot
 approve, deny, list, or revoke requests. A signed grant does not turn an
 employee laptop into an attested runner.
+
+## Access profiles
+
+Every allowed request binds one Vault role and one read-only
+`<mount>/creds/<role>` path. Which mount serves an operation is an **access
+profile** — the extension point that turns one broker into many lanes:
+
+| Operation | Vault engine | Status |
+| --- | --- | --- |
+| `terraform-plan` / `terraform-apply` | AWS STS (`aws/creds/*`) | End to end: policy, binding, direct redemption, reference Terraform runner, sandbox deployment |
+| `kubernetes-inspect` | Kubernetes secrets mount (`kubernetes/creds/*`) | Control plane complete and tested against real Vault (policy, per-request role, cross-profile isolation, revocation); sandbox engine wiring and a reference runner are future work |
+
+The real-Vault integration test proves cross-profile isolation: a
+kubernetes-lane token cannot read the AWS credential path, and vice versa.
+Adding a lane (databases, SSH, internal APIs) is one profile entry plus
+policy — the credential-blind contract does not change.
 
 ## Architecture
 
@@ -179,9 +212,8 @@ npm run build
 Run deployment static checks without contacting AWS:
 
 ```bash
-export TF_CLOUD_ORGANIZATION='agentgate-static-validation'
 terraform fmt -check -recursive deploy
-for root in infra platform agentgate; do
+for root in bootstrap infra platform agentgate; do
   terraform -chdir="deploy/${root}" init \
     -backend=false \
     -input=false \
@@ -191,6 +223,7 @@ done
 render_dir="$(mktemp -d)"
 deploy/scripts/render-charts.sh "${render_dir}"
 deploy/scripts/assert-agentgate-static.sh
+terraform -chdir=deploy/bootstrap test
 terraform -chdir=deploy/agentgate test
 shellcheck deploy/scripts/*.sh deploy/scripts/lib/*.sh
 rm -rf "${render_dir}"
@@ -225,8 +258,9 @@ Use a dedicated account and read the full [deployment guide](docs/DEPLOY.md);
 the guide deliberately exposes cost and manual security boundaries rather than
 hiding them in a one-command script.
 
-1. Complete [prerequisites](docs/DEPLOY.md#prerequisites) and HCP/AWS dynamic
-   credential bootstrap. Do not create static AWS keys.
+1. Complete [prerequisites](docs/DEPLOY.md#prerequisites) and apply
+   `deploy/bootstrap` (S3 state backend plus GitHub OIDC deployment trust).
+   Do not create static AWS keys.
 2. Run [static validation](docs/DEPLOY.md#static-validation-before-any-plan).
 3. Apply [infrastructure](docs/DEPLOY.md#apply-layer-1-infrastructure).
 4. Apply and initialize the [platform](docs/DEPLOY.md#apply-layer-2-platform-first-pass),
@@ -237,9 +271,11 @@ hiding them in a one-command script.
 7. Run the complete [90-minute lab](docs/TEACHING.md) when teaching.
 8. [Destroy in reverse order](docs/DEPLOY.md#reverse-destroy) when idle.
 
-The sandbox uses HCP Terraform dynamic provider credentials and runtime
+The sandbox uses AWS SSO locally, GitHub Actions OIDC in CI, and runtime
 Kubernetes Secret references. No AWS key or Vault token belongs in Terraform
-variables or state.
+variables, state, or GitHub. See
+[ADR-0001](docs/adr/0001-deployment-control-plane.md) for the deployment
+decision record.
 
 ## Repository layout
 
@@ -258,6 +294,7 @@ variables or state.
 | `internal/audit` | Immutable credential-free audit records and forward migrations |
 | `policies` | Embedded default-deny Rego and tests |
 | `dashboard` | OIDC React operations UI |
+| `deploy/bootstrap` | S3 state backend, KMS, and GitHub OIDC deployment trust |
 | `deploy/infra` | VPC, EKS, demo IAM target, and tagged S3 target |
 | `deploy/platform` | SPIRE, Vault, PostgreSQL, and Vault/AWS configuration |
 | `deploy/agentgate` | AgentGate, identity registrations, and suspended demo Jobs |
@@ -277,6 +314,12 @@ opa fmt --diff policies
 opa check policies
 opa test -v policies
 ```
+
+When `AGENTGATE_TEST_DATABASE_URL` is unset, the PostgreSQL integration
+tests start a disposable pinned `postgres:17` container through Docker; with
+`AGENTGATE_REQUIRE_DOCKER=true` they fail instead of skipping when Docker is
+unavailable. Point the variable at an existing database to skip the
+container.
 
 Then run the dashboard and deployment checks from the local quickstart. CI also:
 
@@ -318,9 +361,9 @@ closure criteria.
 ## Cost and teardown
 
 EKS control-plane hours, two worker nodes, a NAT gateway, public IPv4, EBS,
-CloudWatch, data transfer, and HCP Terraform can incur charges. Review the plan
-and current pricing before apply.
+CloudWatch, data transfer, and the state-bucket KMS key can incur charges.
+Review the plan and current pricing before apply.
 
 **Destroy the sandbox when idle.** Destroy `agentgate`, then `platform`, then
-`infra`, and verify EKS, EBS, NAT, S3, IAM, logs, HCP workspaces, and agent pools
-are gone as described in [Reverse destroy](docs/DEPLOY.md#reverse-destroy).
+`infra`, then `bootstrap`, and verify EKS, EBS, NAT, S3, IAM, and logs are
+gone as described in [Reverse destroy](docs/DEPLOY.md#reverse-destroy).

@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 640" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <!-- AgentGate direct-redemption flow. Self-contained animated SVG (SMIL);
+       renders animated in GitHub READMEs and any browser. -->
+  <defs>
+    <path id="p1" d="M186,97 L248,97"/>
+    <path id="p2" d="M436,97 L516,97"/>
+    <path id="p3" d="M620,192 L620,140"/>
+    <path id="p4" d="M600,140 C600,230 600,250 600,318"/>
+    <path id="p5" d="M324,369 L466,369"/>
+    <path id="p6" d="M734,369 L846,369"/>
+    <path id="p7" d="M724,97 C900,97 934,180 934,318"/>
+    <path id="p8" d="M934,398 L934,468"/>
+    <path id="p9" d="M934,318 C934,180 900,97 724,97"/>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect width="1180" height="640" rx="12" fill="#0b1120"/>
+  <rect x="0.5" y="0.5" width="1179" height="639" rx="12" fill="none" stroke="#1e293b"/>
+
+  <!-- master clock: everything keys off this 21s loop -->
+  <rect width="0" height="0" fill="none">
+    <animate id="master" attributeName="x" from="0" to="0" dur="21s" repeatCount="indefinite"/>
+  </rect>
+
+  <text x="34" y="40" fill="#e2e8f0" font-size="19" font-weight="700">AgentGate · credential-blind direct redemption</text>
+  <text x="1146" y="40" fill="#475569" font-size="12" text-anchor="end">two proofs in · zero credentials through the control plane</text>
+
+  <!-- ======================= edges ======================= -->
+  <g stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#arrow)">
+    <use href="#p1"/><use href="#p2"/><use href="#p3"/><use href="#p4"/>
+    <use href="#p5"/><use href="#p6"/><use href="#p7"/><use href="#p8"/>
+  </g>
+
+  <!-- ======================= nodes ======================= -->
+  <!-- human requester -->
+  <g>
+    <rect x="30" y="70" width="156" height="54" rx="9" fill="#111827" stroke="#64748b"/>
+    <text x="108" y="93" fill="#e2e8f0" font-size="13.5" font-weight="600" text-anchor="middle">Human requester</text>
+    <text x="108" y="111" fill="#64748b" font-size="11" text-anchor="middle">SSO session</text>
+  </g>
+  <!-- dispatcher -->
+  <g>
+    <rect x="248" y="70" width="188" height="54" rx="9" fill="#111827" stroke="#f59e0b"/>
+    <text x="342" y="93" fill="#e2e8f0" font-size="13.5" font-weight="600" text-anchor="middle">Trusted dispatcher</text>
+    <text x="342" y="111" fill="#f59e0b" font-size="11" text-anchor="middle">signs the task grant (Ed25519)</text>
+  </g>
+  <!-- runner -->
+  <g>
+    <rect x="516" y="60" width="208" height="80" rx="9" fill="#111827" stroke="#22c55e"/>
+    <text x="620" y="86" fill="#e2e8f0" font-size="13.5" font-weight="600" text-anchor="middle">Governed runner pod</text>
+    <text x="620" y="104" fill="#22c55e" font-size="11" text-anchor="middle">attested workload</text>
+    <text x="620" y="122" fill="#64748b" font-size="11" text-anchor="middle">Terraform / kubectl child only</text>
+  </g>
+  <!-- spire -->
+  <g>
+    <rect x="516" y="192" width="208" height="50" rx="9" fill="#111827" stroke="#22c55e"/>
+    <text x="620" y="213" fill="#e2e8f0" font-size="13" font-weight="600" text-anchor="middle">SPIRE</text>
+    <text x="620" y="230" fill="#22c55e" font-size="11" text-anchor="middle">X509-SVID · JWT-SVID (aud vault, 5 min)</text>
+  </g>
+  <!-- agentgate -->
+  <g>
+    <rect x="466" y="318" width="268" height="100" rx="10" fill="#0f1d3a" stroke="#3b82f6" stroke-width="1.8"/>
+    <text x="600" y="345" fill="#e2e8f0" font-size="14.5" font-weight="700" text-anchor="middle">AgentGate control plane</text>
+    <text x="600" y="366" fill="#93c5fd" font-size="11.5" text-anchor="middle">verifies SVID + signed grant · OPA default-deny</text>
+    <text x="600" y="384" fill="#93c5fd" font-size="11.5" text-anchor="middle">Postgres audit · approval state machine</text>
+    <text x="600" y="404" fill="#f87171" font-size="11" font-weight="600" text-anchor="middle">never sees a credential</text>
+  </g>
+  <!-- approver -->
+  <g>
+    <rect x="140" y="342" width="184" height="54" rx="9" fill="#111827" stroke="#a855f7"/>
+    <text x="232" y="365" fill="#e2e8f0" font-size="13" font-weight="600" text-anchor="middle">Human approver</text>
+    <text x="232" y="383" fill="#a855f7" font-size="11" text-anchor="middle">separate OIDC rail</text>
+  </g>
+  <!-- vault -->
+  <g>
+    <rect x="846" y="318" width="176" height="80" rx="9" fill="#111827" stroke="#eab308"/>
+    <text x="934" y="344" fill="#e2e8f0" font-size="13.5" font-weight="600" text-anchor="middle">Vault</text>
+    <text x="934" y="362" fill="#eab308" font-size="11" text-anchor="middle">per-request role + policy</text>
+    <text x="934" y="380" fill="#64748b" font-size="11" text-anchor="middle">bound_subject = exact SPIFFE ID</text>
+  </g>
+  <!-- aws -->
+  <g>
+    <rect x="846" y="468" width="176" height="66" rx="9" fill="#111827" stroke="#f87171"/>
+    <text x="934" y="492" fill="#e2e8f0" font-size="13" font-weight="600" text-anchor="middle">AWS STS · CloudTrail</text>
+    <text x="934" y="510" fill="#f87171" font-size="11" text-anchor="middle">session name = request_id</text>
+    <animate attributeName="opacity" values="1;1;1;1;0.55;1" keyTimes="0;0.74;0.78;0.86;0.93;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+  </g>
+
+  <!-- edge labels -->
+  <g fill="#64748b" font-size="10.5">
+    <text x="217" y="88" text-anchor="middle">task</text>
+    <text x="476" y="88" text-anchor="middle">grant</text>
+    <text x="636" y="170">SVIDs</text>
+    <text x="610" y="240" transform="rotate(90 610,240)"></text>
+    <text x="612" y="256" text-anchor="end">mTLS + signed grant</text>
+    <text x="395" y="360" text-anchor="middle">approve / deny</text>
+    <text x="790" y="360" text-anchor="middle">role write</text>
+    <text x="868" y="150">direct JWT login ⇄ STS</text>
+    <text x="948" y="438">AssumeRole</text>
+  </g>
+
+  <!-- ======================= animated pulses =======================
+       step timings (s): 1:0.5  2:2.5  3:4.5  4:6.5  5:9  6:11.5  7:14  8:16.5 -->
+  <g>
+    <circle r="5.5" fill="#94a3b8" opacity="0">
+      <animateMotion dur="1.4s" begin="master.begin+0.5s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p1"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.024;0.05;0.08;0.095;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="5.5" fill="#f59e0b" opacity="0">
+      <animateMotion dur="1.4s" begin="master.begin+2.5s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p2"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.119;0.14;0.175;0.19;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="5.5" fill="#22c55e" opacity="0">
+      <animateMotion dur="1.2s" begin="master.begin+4.5s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p3"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.214;0.235;0.26;0.275;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="6" fill="#3b82f6" opacity="0">
+      <animateMotion dur="1.8s" begin="master.begin+6.5s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p4"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.31;0.33;0.385;0.4;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="5.5" fill="#a855f7" opacity="0">
+      <animateMotion dur="1.4s" begin="master.begin+9s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p5"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.429;0.45;0.485;0.5;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="5.5" fill="#3b82f6" opacity="0">
+      <animateMotion dur="1.4s" begin="master.begin+11.5s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p6"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.548;0.57;0.605;0.62;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="6" fill="#22c55e" opacity="0">
+      <animateMotion dur="1.8s" begin="master.begin+14s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p7"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.667;0.687;0.74;0.755;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="5.5" fill="#f87171" opacity="0">
+      <animateMotion dur="1s" begin="master.begin+16.5s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p8"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.786;0.8;0.825;0.84;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+    <circle r="6" fill="#f87171" opacity="0">
+      <animateMotion dur="1.6s" begin="master.begin+17.6s" repeatCount="indefinite" repeatDur="21s"><mpath href="#p9"/></animateMotion>
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.838;0.856;0.9;0.915;1" dur="21s" begin="master.begin" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- ======================= step captions ======================= -->
+  <rect x="30" y="566" width="1120" height="46" rx="9" fill="#0f172a" stroke="#1e293b"/>
+  <g font-size="13.5" fill="#cbd5e1">
+    <text x="590" y="594" text-anchor="middle" opacity="0">1 · A human asks the dispatcher for a task — accountability starts here (on_behalf_of)
+      <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.01;0.1;0.115;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">2 · The dispatcher signs the grant: repo, commit, operation, environment, TTL, single-use nonce
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.115;0.13;0.2;0.215;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">3 · SPIRE attests the pod and issues its short-lived X509-SVID — proof of what is running, and where
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.215;0.23;0.295;0.31;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">4 · Two proofs over mTLS: SVID + signed grant → OPA default-deny policy → append-only audit with the policy's SHA-256
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.31;0.325;0.415;0.43;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">5 · Production apply parks as pending_approval — a human decides on a separately authenticated rail
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.43;0.445;0.535;0.55;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">6 · On allow: AgentGate writes ONE Vault role + ONE read-only policy, bound to the exact SPIFFE ID, TTL-capped
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.55;0.565;0.655;0.67;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">7 · The runner logs into Vault ITSELF with a 5-minute JWT-SVID — Vault's audit log names the agent, not a broker
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.67;0.685;0.775;0.79;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">8 · Vault assumes the scoped AWS role (session = request_id) and returns STS directly to the runner's child process
+      <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.79;0.805;0.9;0.915;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+    <text x="590" y="594" text-anchor="middle" opacity="0">9 · TTL expires → the role and policy are reaped; every record joins on one request_id, into CloudTrail
+      <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.915;0.93;0.99;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
+  </g>
+
+  <!-- legend -->
+  <g font-size="11" fill="#64748b">
+    <circle cx="44" cy="546" r="4.5" fill="#22c55e"/><text x="54" y="550">workload identity</text>
+    <circle cx="168" cy="546" r="4.5" fill="#f59e0b"/><text x="178" y="550">signed task grant</text>
+    <circle cx="292" cy="546" r="4.5" fill="#3b82f6"/><text x="302" y="550">control plane (credential-free)</text>
+    <circle cx="478" cy="546" r="4.5" fill="#a855f7"/><text x="488" y="550">human approval</text>
+    <circle cx="596" cy="546" r="4.5" fill="#f87171"/><text x="606" y="550">credential data plane — never touches AgentGate</text>
+  </g>
+</svg>

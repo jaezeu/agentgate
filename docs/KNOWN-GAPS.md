@@ -7,20 +7,21 @@ mixing human and workload identity rails is a release blocker, not an acceptable
 gap.
 
 Evidence was last reconciled on 2026-07-17. Automated checks use real PostgreSQL
-and Vault, but normal CI intentionally does not require AWS, EKS, HCP Terraform,
-or CloudTrail.
+and Vault, but normal CI intentionally does not require AWS, EKS, or
+CloudTrail.
 
 ## Demo blocker / high likelihood
 
 ### G-01: A fresh AWS sandbox deployment has not been observed
 
 - **Owner:** First sandbox operator and issue #6 integration owner.
-- **Affected component:** All three Terraform roots, HCP Terraform agents, EKS,
-  SPIRE, Vault, PostgreSQL, AgentGate, and the governed runner Job.
+- **Affected component:** All four Terraform roots, the GitHub OIDC deploy
+  workflow, EKS, SPIRE, Vault, PostgreSQL, AgentGate, and the governed
+  runner Job.
 - **Evidence/source checked:** Terraform formatting, initialization, validation,
   static tests, chart rendering, ShellCheck, local image builds, real PostgreSQL,
-  and real Vault testcontainers pass. No AWS account or HCP organization was
-  changed during this integration pass.
+  and real Vault testcontainers pass. No AWS account or GitHub environment
+  was changed during this integration pass.
 - **Exact manual verification:** Follow [DEPLOY.md](DEPLOY.md) from preflight
   through all three applies; run `deploy/scripts/verify-cluster.sh`; execute the
   signed-grant runner; verify the Terraform plan, Vault audit attribution,
@@ -43,8 +44,8 @@ or CloudTrail.
   know the operator's registry digest in advance.
 - **Exact manual verification:** Build for the EKS node architecture, scan the
   image, push it, pull it by digest, run `agentgate version`, `agent-sim -h`, and
-  `terraform version`, then set the digest-only HCP workspace variable as shown
-  in `DEPLOY.md`.
+  `terraform version`, then set the digest-only image variable as shown in
+  `DEPLOY.md`.
 - **Failure symptom:** Layer 3 rejects a tag-only value, cannot pull the image,
   or runs bytes other than the reviewed build.
 - **Workaround:** None for the cloud demo. Keep the Jobs suspended until a digest
@@ -174,6 +175,29 @@ or CloudTrail.
 - **Closure criterion:** Production verifies an organizational dispatcher
   identity with key IDs, rotation, revocation, issuance audit, and authenticated
   SSO-derived `on_behalf_of`.
+
+### G-16: The kubernetes-inspect profile has no sandbox wiring or runner
+
+- **Owner:** Platform integrator adding the Kubernetes lane.
+- **Affected component:** `deploy/platform` (no Vault Kubernetes secrets
+  engine), `deploy/agentgate` (no `--vault-kubernetes-mount` argument or
+  inspector workload registration), `cmd/agent-sim` (Terraform-only runner).
+- **Evidence/source checked:** Policy, transport validation, per-request
+  binding, cross-profile isolation, and revocation for `kubernetes-inspect`
+  are tested against real Vault using a deterministic logical mount. No
+  Kubernetes secrets engine, RBAC, or governed inspector workload exists in
+  the deployment.
+- **Exact manual verification:** Configure Vault's Kubernetes secrets engine
+  with a token-request-scoped ServiceAccount, register an inspector workload,
+  start AgentGate with `--vault-kubernetes-mount`, and redeem a
+  `kubernetes-inspect` grant end to end.
+- **Failure symptom:** A `kubernetes-inspect` grant passes policy but binding
+  enablement fails closed because no mount profile is configured.
+- **Workaround:** None needed; the sandbox default leaves the profile
+  disabled, and enablement failure is deny-by-default.
+- **Closure criterion:** A sandbox run shows a short-lived, namespace-scoped
+  ServiceAccount token issued directly to an attested inspector workload with
+  the same audit chain as the Terraform lane.
 
 ### G-09: Release provenance is not production grade
 

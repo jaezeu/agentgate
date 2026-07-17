@@ -148,6 +148,47 @@ descriptor expires and removes the role and policy. Claims use
 restart. The descriptor and reference agent independently reject an expired
 window.
 
+## Request lifecycle state machine
+
+Approval and binding state live in PostgreSQL; every transition below is a
+serializable row-locked update, and only the single winning approval
+transition can reach `EnableAccess`.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "approval: pending" as AP
+    state "approval: approved" as AA
+    state "approval: denied" as AD
+    state "approval: expired" as AE
+
+    [*] --> Decided: policy evaluation
+    Decided --> AP: pending_approval
+    Decided --> BindingPending: allow
+    Decided --> [*]: deny (no binding)
+    AP --> AA: human approve (row-lock winner)
+    AP --> AD: human deny
+    AP --> AE: window expired
+    AA --> BindingPending
+
+    state "binding: pending" as BindingPending
+    state "binding: enabling" as BE
+    state "binding: enabled" as BEN
+    state "binding: failed" as BF
+    state "binding: revoking" as BR
+    state "binding: revoked" as BRV
+
+    BindingPending --> BE: ClaimBinding (CAS)
+    BE --> BEN: Vault role+policy written and verified
+    BE --> BF: Vault failure (fail closed)
+    BF --> BE: retry claim
+    BE --> BE: stale claim reclaimed after 30s
+    BEN --> BR: expiry worker claim (SKIP LOCKED)
+    BR --> BRV: role+policy deleted
+    BR --> BEN: Vault unreachable, released for retry
+    BRV --> [*]
+```
+
 ## Two independent proofs
 
 ### Proof 1: workload identity
@@ -174,7 +215,7 @@ uses Ed25519 to sign a `TaskGrant` containing:
 - `request_id`
 - `repo`
 - `commit_sha`
-- `operation` (`terraform-plan` or `terraform-apply`)
+- `operation` (`terraform-plan`, `terraform-apply`, or `kubernetes-inspect`)
 - `environment`
 - `vault_role`
 - `ttl` in seconds
@@ -214,7 +255,9 @@ AgentGate performs only these Vault operations:
 - create or delete a request-scoped JWT auth role;
 - bind that role to one exact SPIFFE subject and the `vault` audience;
 - create or delete a request-scoped policy that grants only `read` on one
-  `aws/creds/<role>` path;
+  `<mount>/creds/<role>` path, where the mount is selected by the operation's
+  configured access profile (AWS STS for the terraform operations; a Vault
+  Kubernetes secrets mount for `kubernetes-inspect`);
 - report that exact lease cleanup was not performed when no credential-free
   lease identifier exists.
 
@@ -330,12 +373,34 @@ Its only writes are approve, deny, and revoke.
 
 ## Deployment architecture
 
-Deployment uses three CLI-driven HCP Terraform workspaces in one placeholder
-organization. They use dynamic provider credentials; no static cloud key is
-stored in Terraform variables or state. Secret references are resolved by name.
+Deployment uses four plain Terraform roots. State for the sandbox roots
+lives in one versioned, KMS-encrypted S3 bucket with native lock files;
+applies run either from an operator AWS SSO session or from GitHub Actions
+through an OIDC-assumed deployer role gated by a protected environment. No
+static cloud or Vault credential is stored in Terraform variables, state, or
+GitHub. Secret references are resolved by name at runtime.
+[ADR-0001](adr/0001-deployment-control-plane.md) records the decision,
+including why HCP Terraform (workspaces and Stacks) and GitOps controllers
+were rejected for this single-deployment sandbox.
+
+```mermaid
+flowchart LR
+    GH[GitHub Actions
+plan / gated apply / drift] -->|OIDC| DR[Deployer role]
+    OP[Operator AWS SSO] --> ST
+    DR --> ST[(S3 state
+lockfile + KMS)]
+    DR --> B[deploy/infra]
+    B --> C[deploy/platform]
+    C --> D[deploy/agentgate]
+    C -.->|port-forward + jwt-deployer| V[In-cluster Vault]
+```
 
 Apply in this order:
 
+0. **`deploy/bootstrap`** (local state) creates the state bucket, the GitHub
+   OIDC provider, and the deployer role trusted only for this repository's
+   deploy environments.
 1. **`deploy/infra`** creates a VPC, a small EKS cluster with two `t3.medium`
    nodes, and one demo target IAM role. The role is scoped to a tagged sandbox
    resource set, such as one S3 prefix plus read-only EC2 describe operations.
@@ -349,10 +414,10 @@ Apply in this order:
    direct-redemption/Terraform runner, SPIRE registration entries based on
    namespace and service account, and dispatcher key bootstrap.
 
-Destroy in the exact reverse order: `agentgate`, `platform`, then `infra`.
-EKS worker nodes, load balancers, NAT gateways, Vault storage, Postgres storage,
-and HCP Terraform usage can all incur cost. The sandbox must be destroyed when
-idle, and cost estimates must be reviewed before apply.
+Destroy in the exact reverse order: `agentgate`, `platform`, `infra`, then
+`bootstrap`. EKS worker nodes, load balancers, NAT gateways, Vault storage,
+Postgres storage, and the state KMS key can all incur cost. The sandbox must
+be destroyed when idle, and cost estimates must be reviewed before apply.
 
 The sandbox uses single-replica Vault. Production requires Vault HA, KMS-backed
 auto-unseal, tested backup and restore, and, where applicable, Vault Enterprise
@@ -423,8 +488,12 @@ cannot recover truthful task context from a malicious dispatcher.
   correct. Review and provenance remain necessary.
 - Correlation depends on preserving `request_id` in Vault and AWS session
   metadata. CloudTrail does not itself understand the full AgentGate chain.
-- The PoC operation enum covers Terraform plan and apply. It is not a complete
-  model for Kubernetes, incident response, CI/CD, or arbitrary cloud APIs.
+- Operations map to Vault secrets mounts through access profiles. The
+  terraform operations are wired end to end (AWS STS, reference runner,
+  sandbox deployment); `kubernetes-inspect` is complete and tested at the
+  control-plane and Vault layers but has no sandbox engine wiring or
+  reference runner yet. Incident response, CI/CD, and arbitrary cloud APIs
+  remain unmodeled.
 
 ## Security review questions
 
