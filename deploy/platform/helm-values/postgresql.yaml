@@ -1,0 +1,91 @@
+fullnameOverride: agentgate-postgresql
+
+image:
+  registry: registry-1.docker.io
+  repository: bitnami/postgresql
+  tag: latest
+  digest: sha256:db2312d9b243afa8c3b3f5496e478d17d0dff9791d06f3b93b9567abd86ae92f
+  pullPolicy: IfNotPresent
+
+auth:
+  enablePostgresUser: true
+  username: agentgate
+  database: agentgate
+  existingSecret: agentgate-postgresql
+  usePasswordFiles: true
+  secretKeys:
+    adminPasswordKey: postgres-password
+    userPasswordKey: password
+
+architecture: standalone
+
+primary:
+  initdb:
+    scriptsConfigMap: agentgate-postgresql-init
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  startupProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 30
+
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 8Gi
+
+  persistentVolumeClaimRetentionPolicy:
+    enabled: true
+    whenScaled: Retain
+    whenDeleted: Retain
+
+  automountServiceAccountToken: false
+
+  networkPolicy:
+    enabled: true
+    allowExternal: false
+    allowExternalEgress: false
+    extraIngress:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: agentgate-platform
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: agentgate-migrations
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: spire-system
+            podSelector:
+              matchLabels:
+                component: server
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: agentgate
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: agentgate
+        ports:
+          - port: 5432
+            protocol: TCP
+
+  service:
+    type: ClusterIP
+
+metrics:
+  enabled: false
+
+volumePermissions:
+  enabled: false
+
+tls:
+  enabled: false

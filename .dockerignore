@@ -1,0 +1,11 @@
+.git
+.github
+.terraform
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+dashboard/node_modules
+dashboard/dist
+bin
+coverage.out
+*.pem

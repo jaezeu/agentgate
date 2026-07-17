@@ -1,0 +1,275 @@
+global:
+  k8s:
+    clusterDomain: cluster.local
+  spire:
+    clusterName: agentgate-sandbox-eks
+    trustDomain: sandbox.agentgate.test
+    jwtIssuer: https://spire-spiffe-oidc-discovery-provider.spire-system.svc.cluster.local
+    caSubject:
+      country: US
+      organization: AgentGate Sandbox
+      commonName: agentgate.test
+    persistence:
+      storageClass: gp3
+    recommendations:
+      enabled: true
+      namespaceLayout: false
+      namespacePSS: false
+      priorityClassName: true
+      strictMode: true
+      securityContexts: true
+      prometheus: false
+    namespaces:
+      create: false
+      system:
+        name: spire-system
+        create: false
+      server:
+        name: spire-system
+        create: false
+    tools:
+      kubectl:
+        tag: v1.36.1
+  installAndUpgradeHooks:
+    enabled: true
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  deleteHooks:
+    enabled: true
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+spire-server:
+  enabled: true
+  kind: statefulset
+  replicaCount: 1
+  image:
+    tag: "1.15.1"
+  serviceAccount:
+    name: spire-server
+  auditLogEnabled: true
+  logLevel: info
+  logFormat: json
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    type: pvc
+    size: 2Gi
+    accessMode: ReadWriteOnce
+    storageClass: gp3
+  dataStore:
+    sql:
+      databaseType: postgres
+      databaseName: spire
+      host: agentgate-postgresql.agentgate-platform.svc.cluster.local
+      port: 5432
+      username: agentgate
+      options:
+        - sslmode: disable
+      externalSecret:
+        enabled: true
+        name: agentgate-postgresql
+        key: password
+      maxOpenConns: 20
+      maxIdleConns: 5
+      connMaxLifetime: 30m
+  controllerManager:
+    enabled: true
+    className: spire-system-spire
+    watchClassless: false
+    image:
+      tag: "0.6.6"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      capabilities:
+        drop:
+          - ALL
+    identities:
+      clusterSPIFFEIDs:
+        default:
+          enabled: false
+          spiffeIDTemplate: spiffe://agentgate.test/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}
+        child-servers:
+          enabled: false
+        oidc-discovery-provider:
+          enabled: true
+          type: oidc-discovery-provider
+          autoPopulateDNSNames: true
+          ttl: 1h
+          jwtTTL: 5m
+        test-keys:
+          enabled: false
+        spike-keeper:
+          enabled: false
+        spike-nexus:
+          enabled: false
+        spike-bootstrap:
+          enabled: false
+        spike-pilot:
+          enabled: false
+        vault:
+          enabled: true
+          type: raw
+          spiffeIDTemplate: spiffe://agentgate.test/ns/vault/sa/vault
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault
+              app.kubernetes.io/instance: vault
+              component: server
+          workloadSelectorTemplates:
+            - k8s:ns:vault
+            - k8s:sa:vault
+          dnsNameTemplates:
+            - vault
+            - vault.vault
+            - vault.vault.svc
+            - vault.vault.svc.cluster.local
+          ttl: 1h
+          jwtTTL: 5m
+          admin: false
+          downstream: false
+          fallback: false
+    cacheNamespaces:
+      spire:
+        fieldSelectors:
+          metadata.name: spire-system
+      vault:
+        fieldSelectors:
+          metadata.name: vault
+      agentgate:
+        fieldSelectors:
+          metadata.name: agentgate
+      runner:
+        fieldSelectors:
+          metadata.name: agentgate-sandbox
+
+spire-agent:
+  enabled: true
+  image:
+    tag: "1.15.1"
+  serviceAccount:
+    name: spire-agent
+  logLevel: info
+  logFormat: json
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  workloadAttestors:
+    k8s:
+      enabled: true
+      verification:
+        type: apiServerCA
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    capabilities:
+      drop:
+        - ALL
+  persistence:
+    type: emptyDir
+  sockets:
+    admin:
+      enabled: false
+      mountOnHost: false
+
+spiffe-csi-driver:
+  enabled: true
+  image:
+    tag: "0.2.7"
+  nodeDriverRegistrar:
+    image:
+      tag: v2.15.0
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+spiffe-oidc-discovery-provider:
+  enabled: true
+  replicaCount: 1
+  image:
+    tag: "1.15.1"
+  spiffeHelper:
+    image:
+      tag: "0.11.0"
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  service:
+    type: ClusterIP
+  config:
+    logLevel: info
+    logFormat: json
+  tls:
+    spire:
+      enabled: true
+  ingress:
+    enabled: false
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
+
+tornjak-frontend:
+  enabled: false
+spike-keeper:
+  enabled: false
+spike-nexus:
+  enabled: false
+spike-pilot:
+  enabled: false

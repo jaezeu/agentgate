@@ -1,0 +1,299 @@
+global:
+  enabled: true
+  tlsDisable: false
+
+injector:
+  enabled: false
+
+server:
+  enabled: true
+  image:
+    repository: hashicorp/vault
+    tag: "2.0.3"
+    pullPolicy: IfNotPresent
+
+  logLevel: info
+  logFormat: json
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  authDelegator:
+    enabled: false
+
+  shareProcessNamespace: true
+
+  readinessProbe:
+    enabled: true
+    port: 8200
+    failureThreshold: 3
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+
+  livenessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true
+    port: 8200
+    failureThreshold: 3
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 8200
+    targetPort: 8200
+
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: gp3
+    accessMode: ReadWriteOnce
+
+  auditStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: gp3
+    accessMode: ReadWriteOnce
+
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+
+  standalone:
+    enabled: false
+
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = false
+        disable_mlock = true
+        pid_file = "/vault/tls/vault.pid"
+
+        listener "tcp" {
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_disable = 0
+          tls_cert_file = "/vault/tls/tls.crt"
+          tls_key_file = "/vault/tls/tls.key"
+          tls_client_ca_file = "/vault/tls/ca.pem"
+        }
+
+        storage "raft" {
+          path = "/vault/data"
+          node_id = "VAULT_RAFT_NODE_ID"
+        }
+
+  serviceAccount:
+    create: true
+    createSecret: false
+    name: vault
+    serviceDiscovery:
+      enabled: false
+
+  statefulSet:
+    securityContext:
+      pod:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      container:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+
+  volumes:
+    - name: spiffe-workload-api
+      csi:
+        driver: csi.spiffe.io
+        readOnly: true
+    - name: spiffe-helper-config
+      configMap:
+        name: vault-spiffe-helper
+    - name: vault-tls
+      emptyDir:
+        sizeLimit: 16Mi
+    - name: tmp
+      emptyDir:
+        sizeLimit: 64Mi
+
+  volumeMounts:
+    - name: vault-tls
+      mountPath: /vault/tls
+    - name: tmp
+      mountPath: /tmp
+
+  extraInitContainers:
+    - name: spiffe-helper-init
+      image: ghcr.io/spiffe/spiffe-helper@sha256:2759b3a699bb63b91cc5896f46cd6f70b9e3dfed9f7f4355a3a0a4e702984f9c
+      imagePullPolicy: IfNotPresent
+      args:
+        - -config
+        - /etc/spiffe-helper/helper-init.conf
+        - -daemon-mode=false
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      volumeMounts:
+        - name: spiffe-workload-api
+          mountPath: /run/spire/agent-sockets
+          readOnly: true
+        - name: spiffe-helper-config
+          mountPath: /etc/spiffe-helper
+          readOnly: true
+        - name: vault-tls
+          mountPath: /vault/tls
+
+  extraContainers:
+    - name: spiffe-helper
+      image: ghcr.io/spiffe/spiffe-helper@sha256:2759b3a699bb63b91cc5896f46cd6f70b9e3dfed9f7f4355a3a0a4e702984f9c
+      imagePullPolicy: IfNotPresent
+      args:
+        - -config
+        - /etc/spiffe-helper/helper.conf
+      ports:
+        - name: helper-health
+          containerPort: 8081
+          protocol: TCP
+      livenessProbe:
+        httpGet:
+          path: /live
+          port: helper-health
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 2
+        failureThreshold: 3
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: helper-health
+          scheme: HTTP
+        initialDelaySeconds: 2
+        periodSeconds: 5
+        timeoutSeconds: 2
+        failureThreshold: 3
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      volumeMounts:
+        - name: spiffe-workload-api
+          mountPath: /run/spire/agent-sockets
+          readOnly: true
+        - name: spiffe-helper-config
+          mountPath: /etc/spiffe-helper
+          readOnly: true
+        - name: vault-tls
+          mountPath: /vault/tls
+
+  networkPolicy:
+    enabled: true
+    ingress:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: vault
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: agentgate
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: agentgate-sandbox
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: hcp-terraform-agent
+        ports:
+          - port: 8200
+            protocol: TCP
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: vault
+        ports:
+          - port: 8201
+            protocol: TCP
+    egress:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: kube-system
+            podSelector:
+              matchLabels:
+                k8s-app: kube-dns
+        ports:
+          - port: 53
+            protocol: UDP
+          - port: 53
+            protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: spire-system
+            podSelector:
+              matchLabels:
+                component: oidc-discovery-provider
+        ports:
+          - port: 8443
+            protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: vault
+        ports:
+          - port: 8201
+            protocol: TCP
+      - to:
+          - ipBlock:
+              cidr: 0.0.0.0/0
+        ports:
+          - port: 443
+            protocol: TCP
+
+ui:
+  enabled: false
+
+csi:
+  enabled: false
