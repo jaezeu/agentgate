@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -19,13 +20,83 @@ import (
 	"github.com/jaezeu/agentgate/internal/authz"
 	"github.com/jaezeu/agentgate/internal/grant"
 	"github.com/jaezeu/agentgate/internal/vaultmgr"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func TestPostgresStoresLifecycleAndRace(t *testing.T) {
-	databaseURL := os.Getenv("AGENTGATE_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("AGENTGATE_TEST_DATABASE_URL is not set")
+const postgresTestImage = "postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d"
+
+// testDatabaseURL prefers a configured database (as in CI) and otherwise
+// starts a disposable PostgreSQL container so that these integration tests
+// never silently skip when the required merge-bar dependencies are present.
+func testDatabaseURL(t *testing.T) string {
+	t.Helper()
+	if databaseURL := os.Getenv("AGENTGATE_TEST_DATABASE_URL"); databaseURL != "" {
+		return databaseURL
 	}
+	requirePostgresDocker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        postgresTestImage,
+			ExposedPorts: []string{"5432/tcp"},
+			Env: map[string]string{
+				"POSTGRES_DB":       "agentgate",
+				"POSTGRES_USER":     "agentgate",
+				"POSTGRES_PASSWORD": "agentgate",
+			},
+			WaitingFor: wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(2 * time.Minute),
+		},
+		Started: true,
+	})
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start PostgreSQL test container: %v", err)
+	}
+	host, err := container.Host(ctx)
+	if err != nil {
+		t.Fatalf("resolve PostgreSQL test host: %v", err)
+	}
+	port, err := container.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		t.Fatalf("resolve PostgreSQL test port: %v", err)
+	}
+	return fmt.Sprintf(
+		"postgres://agentgate:agentgate@%s/agentgate?sslmode=disable",
+		net.JoinHostPort(host, port.Port()),
+	)
+}
+
+func requirePostgresDocker(t *testing.T) {
+	t.Helper()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			handlePostgresUnavailable(t, fmt.Sprint(recovered))
+		}
+	}()
+	provider, err := testcontainers.ProviderDocker.GetProvider()
+	if err == nil {
+		err = provider.Health(context.Background())
+	}
+	if err != nil {
+		handlePostgresUnavailable(t, err.Error())
+	}
+}
+
+func handlePostgresUnavailable(t *testing.T, reason string) {
+	t.Helper()
+	if os.Getenv("AGENTGATE_REQUIRE_DOCKER") == "true" {
+		t.Fatalf("Docker is required for the PostgreSQL integration tests when AGENTGATE_TEST_DATABASE_URL is unset: %s", reason)
+	}
+	t.Skipf("AGENTGATE_TEST_DATABASE_URL is not set and Docker is unavailable: %s", reason)
+}
+
+func TestPostgresStoresLifecycleAndRace(t *testing.T) {
+	databaseURL := testDatabaseURL(t)
 	db := openTestDatabase(t, databaseURL)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -267,10 +338,7 @@ func TestPostgresStoresLifecycleAndRace(t *testing.T) {
 }
 
 func TestPostgresExpiredBindingClaimIsReplicaSafeAndRecoverable(t *testing.T) {
-	databaseURL := os.Getenv("AGENTGATE_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("AGENTGATE_TEST_DATABASE_URL is not set")
-	}
+	databaseURL := testDatabaseURL(t)
 	db := openTestDatabase(t, databaseURL)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
