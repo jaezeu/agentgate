@@ -232,6 +232,60 @@ func TestVaultManagerWithRealVault(t *testing.T) {
 		t.Fatalf("second Revoke() error = %v", err)
 	}
 	assertRevocationReport(t, secondReport)
+
+	// Kubernetes access profile: the same one-role/one-path contract against a
+	// second secrets mount, with cross-profile isolation.
+	kubernetesConfig := config
+	kubernetesConfig.AuditStore = &memoryAuditStore{}
+	kubernetesManager, err := New(kubernetesConfig)
+	if err != nil {
+		t.Fatalf("New(kubernetes profile) error = %v", err)
+	}
+	inspectBinding := binding
+	inspectBinding.RequestID = "018f47f2-4d8a-7b22-98e0-9b638c715d99"
+	inspectBinding.Operation = "kubernetes-inspect"
+	inspectBinding.VaultRole = "cluster-viewer-sandbox"
+	inspectBinding.SPIFFEID = "spiffe://agentgate.test/ns/agents/sa/cluster-inspector"
+	inspectDescriptor, err := kubernetesManager.EnableAccess(ctx, inspectBinding)
+	if err != nil {
+		t.Fatalf("EnableAccess(kubernetes-inspect) error = %v", err)
+	}
+	if inspectDescriptor.SecretsPath != "kubernetes/creds/"+inspectBinding.VaultRole {
+		t.Fatalf("kubernetes descriptor path = %q", inspectDescriptor.SecretsPath)
+	}
+	inspectResources, err := kubernetesManager.resourcesFor(inspectBinding)
+	if err != nil {
+		t.Fatalf("resourcesFor(kubernetes-inspect) error = %v", err)
+	}
+	inspectJWT := signTestJWT(t, signingKey, keyID, issuer, inspectBinding.SPIFFEID, []string{"vault"}, now)
+	inspectAuthorization := loginWithJWT(t, ctx, address, authMount, inspectResources.roleName, inspectJWT)
+	t.Cleanup(func() { inspectAuthorization = "" })
+	inspectClient := newVaultTestClient(t, address, inspectAuthorization)
+	t.Cleanup(inspectClient.ClearToken)
+	inspected, err := inspectClient.Logical().ReadWithContext(ctx, inspectResources.secretsPath)
+	if err != nil || inspected == nil || inspected.Data["proof"] != "kubernetes-allowed-path" {
+		t.Fatalf("kubernetes-lane read failed without returning expected proof: error %v", err)
+	}
+	if crossed, crossErr := inspectClient.Logical().ReadWithContext(
+		ctx,
+		"aws/creds/terraform-sandbox",
+	); crossErr == nil || crossed != nil {
+		t.Fatal("kubernetes-lane token could read the AWS credential path")
+	}
+	inspectReport, err := kubernetesManager.Revoke(ctx, inspectBinding.RequestID)
+	if err != nil || !inspectReport.RoleRemoved || !inspectReport.PolicyRemoved {
+		t.Fatalf("kubernetes-lane Revoke() = %#v, error %v", inspectReport, err)
+	}
+	if authorization, loginErr := tryJWTLogin(
+		ctx,
+		address,
+		authMount,
+		inspectResources.roleName,
+		inspectJWT,
+	); loginErr == nil || authorization != "" {
+		t.Fatal("kubernetes-lane login succeeded after revocation")
+	}
+
 	assertManagerAuditRecords(
 		t,
 		audits.snapshot(),
@@ -347,16 +401,21 @@ func configureVaultFixture(
 	); err != nil {
 		t.Fatalf("configure JWT auth: %v", err)
 	}
-	if err := client.Sys().MountWithContext(ctx, "aws", &hashicorpapi.MountInput{
-		Type:    "kv",
-		Options: map[string]string{"version": "1"},
-	}); err != nil {
-		t.Fatalf("mount deterministic test secrets engine: %v", err)
+	for _, mount := range []string{"aws", "kubernetes"} {
+		if err := client.Sys().MountWithContext(ctx, mount, &hashicorpapi.MountInput{
+			Type:    "kv",
+			Options: map[string]string{"version": "1"},
+		}); err != nil {
+			t.Fatalf("mount deterministic test secrets engine %q: %v", mount, err)
+		}
 	}
-	for path, proof := range map[string]string{
-		"aws/creds/terraform-sandbox": "allowed-path",
-		"aws/creds/terraform-sibling": "sibling-path",
-	} {
+	// #nosec G101 -- deterministic test fixture paths and proof markers, not credentials.
+	deterministicPaths := map[string]string{
+		"aws/creds/terraform-sandbox":             "allowed-path",
+		"aws/creds/terraform-sibling":             "sibling-path",
+		"kubernetes/creds/cluster-viewer-sandbox": "kubernetes-allowed-path",
+	}
+	for path, proof := range deterministicPaths {
 		if _, err := client.Logical().WriteWithContext(
 			ctx,
 			path,

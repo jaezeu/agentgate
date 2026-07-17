@@ -8,7 +8,7 @@ config := {
 	"trust_domains": ["sandbox.agentgate.test"],
 	"repositories": ["github.com/agentgate-sandbox/terraform-demo"],
 	"environments": ["dev", "staging", "prod"],
-	"operations": ["terraform-plan", "terraform-apply"],
+	"operations": ["terraform-plan", "terraform-apply", "kubernetes-inspect"],
 	"max_clock_skew_seconds": 30,
 	"workloads": {
 		"/ns/agentgate-sandbox/sa/terraform-runner": {
@@ -18,6 +18,10 @@ config := {
 		"/ns/agentgate-sandbox/sa/plan-runner": {
 			"operations": ["terraform-plan"],
 			"vault_roles": ["terraform-readonly-sandbox"],
+		},
+		"/ns/agentgate-sandbox/sa/cluster-inspector": {
+			"operations": ["kubernetes-inspect"],
+			"vault_roles": ["cluster-viewer-sandbox"],
 		},
 	},
 }

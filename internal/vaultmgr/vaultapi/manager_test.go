@@ -56,8 +56,10 @@ func TestNewValidatesConfigurationBoundaries(t *testing.T) {
 			mutate: func(config *Config) { config.PolicyPrefix = "agentgate/policy-" },
 		},
 		{
-			name:   "AWS mount traversal",
-			mutate: func(config *Config) { config.AWSMount = "aws/../../sys" },
+			name: "AWS mount traversal",
+			mutate: func(config *Config) {
+				config.SecretsMounts = map[string]string{"terraform-plan": "aws/../../sys"}
+			},
 		},
 		{
 			name:   "zero request timeout",
@@ -499,12 +501,16 @@ func TestRevokeDeletesRoleBeforePolicyAndIsIdempotent(t *testing.T) {
 
 func validManagerConfig() Config {
 	return Config{
-		VaultAddress:   "https://vault.example.test",
-		Namespace:      "",
-		AuthMount:      "jwt",
-		RolePrefix:     "agentgate-role-",
-		PolicyPrefix:   "agentgate-policy-",
-		AWSMount:       "aws",
+		VaultAddress: "https://vault.example.test",
+		Namespace:    "",
+		AuthMount:    "jwt",
+		RolePrefix:   "agentgate-role-",
+		PolicyPrefix: "agentgate-policy-",
+		SecretsMounts: map[string]string{
+			"terraform-plan":     "aws",
+			"terraform-apply":    "aws",
+			"kubernetes-inspect": "kubernetes",
+		},
 		RequestTimeout: 2 * time.Second,
 		Clock: func() time.Time {
 			return time.Date(2030, time.January, 2, 15, 4, 5, 0, time.UTC)
@@ -520,6 +526,7 @@ func validBinding() vaultmgr.AccessBinding {
 	return vaultmgr.AccessBinding{
 		RequestID:     "018f47f2-4d8a-7b22-98e0-9b638c715d22",
 		SPIFFEID:      "spiffe://agentgate.test/ns/agents/sa/terraform-runner",
+		Operation:     "terraform-plan",
 		VaultRole:     "terraform-sandbox",
 		GrantedTTL:    15 * time.Minute,
 		PolicyVersion: strings.Repeat("a", 64),

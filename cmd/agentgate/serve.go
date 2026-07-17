@@ -60,6 +60,7 @@ type serveConfig struct {
 	vaultRolePrefix          string
 	vaultPolicyPrefix        string
 	vaultAWSMount            string
+	vaultKubernetesMount     string
 	vaultRequestTimeout      time.Duration
 	vaultCACertificatePath   string
 	vaultTLSServerName       string
@@ -199,7 +200,13 @@ func parseServeConfig(arguments []string) (serveConfig, error) {
 	flags.StringVar(&config.vaultAuthMount, "vault-auth-mount", "jwt", "agent JWT auth mount")
 	flags.StringVar(&config.vaultRolePrefix, "vault-role-prefix", "agentgate-", "request role name prefix")
 	flags.StringVar(&config.vaultPolicyPrefix, "vault-policy-prefix", "agentgate-", "request policy name prefix")
-	flags.StringVar(&config.vaultAWSMount, "vault-aws-mount", "aws", "Vault AWS secrets mount")
+	flags.StringVar(&config.vaultAWSMount, "vault-aws-mount", "aws", "Vault AWS secrets mount serving the terraform operations")
+	flags.StringVar(
+		&config.vaultKubernetesMount,
+		"vault-kubernetes-mount",
+		"",
+		"optional Vault Kubernetes secrets mount enabling the kubernetes-inspect profile",
+	)
 	flags.DurationVar(&config.vaultRequestTimeout, "vault-request-timeout", 10*time.Second, "Vault control-plane request timeout")
 	flags.StringVar(&config.vaultCACertificatePath, "vault-ca-cert", "", "Vault server CA certificate PEM")
 	flags.StringVar(&config.vaultTLSServerName, "vault-tls-server-name", "", "Vault TLS server name")
@@ -354,13 +361,20 @@ func buildApplication(
 		return nil, nil, resources, errors.New("initialize Vault API client")
 	}
 	vaultBaseClient.SetNamespace(config.vaultNamespace)
+	secretsMounts := map[string]string{
+		string(grant.OperationTerraformPlan):  config.vaultAWSMount,
+		string(grant.OperationTerraformApply): config.vaultAWSMount,
+	}
+	if config.vaultKubernetesMount != "" {
+		secretsMounts[string(grant.OperationKubernetesInspect)] = config.vaultKubernetesMount
+	}
 	vaultManager, err := vaultapi.New(vaultapi.Config{
 		VaultAddress:   config.vaultAddress,
 		Namespace:      config.vaultNamespace,
 		AuthMount:      config.vaultAuthMount,
 		RolePrefix:     config.vaultRolePrefix,
 		PolicyPrefix:   config.vaultPolicyPrefix,
-		AWSMount:       config.vaultAWSMount,
+		SecretsMounts:  secretsMounts,
 		RequestTimeout: config.vaultRequestTimeout,
 		Clock:          func() time.Time { return time.Now().UTC() },
 		ClientProvider: &spiffeVaultClientProvider{

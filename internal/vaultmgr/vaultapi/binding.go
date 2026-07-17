@@ -42,7 +42,11 @@ func (m *Manager) resourcesFor(binding vaultmgr.AccessBinding) (bindingResources
 		return bindingResources{}, fieldError(ErrInvalidBinding, "request_id", "produces a Vault policy name that is too long")
 	}
 
-	secretsPath := m.awsMount + "/creds/" + binding.VaultRole
+	secretsMount, configured := m.secretsMounts[binding.Operation]
+	if !configured {
+		return bindingResources{}, fieldError(ErrInvalidBinding, "operation", "has no configured secrets mount profile")
+	}
+	secretsPath := secretsMount + "/creds/" + binding.VaultRole
 	ttlSeconds := int64(binding.GrantedTTL / time.Second)
 	fingerprint := bindingFingerprint(binding)
 	policy := fmt.Sprintf(
@@ -76,6 +80,9 @@ func (m *Manager) resourcesFor(binding vaultmgr.AccessBinding) (bindingResources
 func validateBinding(binding vaultmgr.AccessBinding) error {
 	if !vaultNamePartPattern.MatchString(binding.RequestID) {
 		return fieldError(ErrInvalidBinding, "request_id", "must contain only letters, digits, hyphens, and underscores")
+	}
+	if !operationPattern.MatchString(binding.Operation) {
+		return fieldError(ErrInvalidBinding, "operation", "must be a lowercase operation name")
 	}
 	if len(binding.SPIFFEID) > maxSPIFFEIDLength ||
 		strings.ContainsAny(binding.SPIFFEID, "*?[]") {
@@ -114,6 +121,7 @@ func bindingFingerprint(binding vaultmgr.AccessBinding) string {
 	for _, value := range []string{
 		binding.RequestID,
 		binding.SPIFFEID,
+		binding.Operation,
 		binding.VaultRole,
 		strconv.FormatInt(int64(binding.GrantedTTL), 10),
 		binding.PolicyVersion,

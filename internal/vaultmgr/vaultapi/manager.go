@@ -26,7 +26,7 @@ type Manager struct {
 	authMount      string
 	rolePrefix     string
 	policyPrefix   string
-	awsMount       string
+	secretsMounts  map[string]string
 	requestTimeout time.Duration
 	clock          func() time.Time
 	clientProvider ClientProvider

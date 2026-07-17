@@ -705,6 +705,7 @@ func (s *server) enableBinding(ctx context.Context, record approval.Record) (app
 	binding := vaultmgr.AccessBinding{
 		RequestID:     record.AccessRequest.RequestID,
 		SPIFFEID:      record.AccessRequest.SPIFFEID,
+		Operation:     string(record.AccessRequest.TaskGrant.Operation),
 		VaultRole:     record.AccessRequest.RequestedVaultRole,
 		GrantedTTL:    remainingTTL,
 		PolicyVersion: record.Decision.PolicyVersion,
@@ -990,8 +991,7 @@ func validateAccessPayload(payload AccessRequestPayload) error {
 		len(taskGrant.Repo) > maxRepoLength ||
 		len(taskGrant.CommitSHA) != 40 ||
 		!isLowerHex(taskGrant.CommitSHA) ||
-		(taskGrant.Operation != grant.OperationTerraformPlan &&
-			taskGrant.Operation != grant.OperationTerraformApply) ||
+		!supportedOperation(taskGrant.Operation) ||
 		taskGrant.Environment == "" ||
 		len(taskGrant.Environment) > maxFieldLength ||
 		taskGrant.VaultRole == "" ||
@@ -1291,8 +1291,7 @@ func parseListFilter(values url.Values) (approval.ListFilter, error) {
 	filter.Repo = values.Get("repo")
 	if value := values.Get("operation"); value != "" {
 		filter.Operation = grant.Operation(value)
-		if filter.Operation != grant.OperationTerraformPlan &&
-			filter.Operation != grant.OperationTerraformApply {
+		if !supportedOperation(filter.Operation) {
 			return approval.ListFilter{}, errors.New("invalid operation filter")
 		}
 	}
@@ -1334,6 +1333,20 @@ func parseListFilter(values url.Values) (approval.ListFilter, error) {
 		}
 	}
 	return filter, nil
+}
+
+// supportedOperation is the transport-level operation allowlist. Whether an
+// operation is permitted for a given workload, and which Vault secrets mount
+// serves it, are decided later by policy and the manager's access profiles.
+func supportedOperation(operation grant.Operation) bool {
+	switch operation {
+	case grant.OperationTerraformPlan,
+		grant.OperationTerraformApply,
+		grant.OperationKubernetesInspect:
+		return true
+	default:
+		return false
+	}
 }
 
 func isLowerHex(value string) bool {

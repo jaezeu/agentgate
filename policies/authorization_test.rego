@@ -406,3 +406,35 @@ test_non_object_input_fails_closed_with_specific_reason if {
 	result.decision == "deny"
 	result.reason == "deny.invalid_input: policy input must be an object"
 }
+
+test_cluster_inspector_kubernetes_inspect_is_allowed if {
+	result := evaluate(object.union(valid_input, {
+		"spiffe_id": "spiffe://sandbox.agentgate.test/ns/agentgate-sandbox/sa/cluster-inspector",
+		"requested_vault_role": "cluster-viewer-sandbox",
+		"task_grant": object.union(valid_grant, {
+			"operation": "kubernetes-inspect",
+			"vault_role": "cluster-viewer-sandbox",
+		}),
+	}))
+	result.decision == "allow"
+	result.granted_ttl_seconds == 600
+}
+
+test_terraform_runner_cannot_use_kubernetes_inspect if {
+	result := evaluate(with_grant({"operation": "kubernetes-inspect"}))
+	result.decision == "deny"
+	result.reason == "deny.operation_not_allowed_for_workload: operation is not allowed for the authenticated workload path"
+}
+
+test_prod_kubernetes_inspect_does_not_require_apply_approval if {
+	result := evaluate(object.union(valid_input, {
+		"spiffe_id": "spiffe://sandbox.agentgate.test/ns/agentgate-sandbox/sa/cluster-inspector",
+		"requested_vault_role": "cluster-viewer-sandbox",
+		"task_grant": object.union(valid_grant, {
+			"operation": "kubernetes-inspect",
+			"vault_role": "cluster-viewer-sandbox",
+			"environment": "prod",
+		}),
+	}))
+	result.decision == "allow"
+}

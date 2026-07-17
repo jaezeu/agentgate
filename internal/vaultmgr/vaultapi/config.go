@@ -17,7 +17,10 @@ const (
 	maxRequestTimeout  = 30 * time.Second
 )
 
-var vaultNamePartPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+var (
+	vaultNamePartPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+	operationPattern     = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
+)
 
 // ClientProvider returns an independently owned Vault API client authorized as
 // AgentGate's control-plane identity. Implementations may mint a fresh,
@@ -35,12 +38,16 @@ func (f ClientProviderFunc) Client(ctx context.Context) (*hashicorpapi.Client, e
 
 // Config contains all Vault manager dependencies and path boundaries.
 type Config struct {
-	VaultAddress   string
-	Namespace      string
-	AuthMount      string
-	RolePrefix     string
-	PolicyPrefix   string
-	AWSMount       string
+	VaultAddress string
+	Namespace    string
+	AuthMount    string
+	RolePrefix   string
+	PolicyPrefix string
+	// SecretsMounts maps each supported grant operation to the Vault secrets
+	// mount whose creds/<role> path the request-scoped policy may read. This
+	// is the access-profile boundary: an operation without a mount cannot be
+	// bound, and every profile keeps the exact one-path read-only contract.
+	SecretsMounts  map[string]string
 	RequestTimeout time.Duration
 	Clock          func() time.Time
 	ClientProvider ClientProvider
@@ -61,9 +68,19 @@ func New(config Config) (*Manager, error) {
 	if err != nil || authMount != config.AuthMount {
 		return nil, fieldError(ErrInvalidConfiguration, "auth_mount", "must be a canonical Vault mount path")
 	}
-	awsMount, err := canonicalVaultPath(config.AWSMount)
-	if err != nil || awsMount != config.AWSMount {
-		return nil, fieldError(ErrInvalidConfiguration, "aws_mount", "must be a canonical Vault mount path")
+	if len(config.SecretsMounts) == 0 {
+		return nil, fieldError(ErrInvalidConfiguration, "secrets_mounts", "at least one operation profile is required")
+	}
+	secretsMounts := make(map[string]string, len(config.SecretsMounts))
+	for operation, mount := range config.SecretsMounts {
+		if !operationPattern.MatchString(operation) {
+			return nil, fieldError(ErrInvalidConfiguration, "secrets_mounts", "contains an invalid operation name")
+		}
+		canonicalMount, err := canonicalVaultPath(mount)
+		if err != nil || canonicalMount != mount {
+			return nil, fieldError(ErrInvalidConfiguration, "secrets_mounts", "must map operations to canonical Vault mount paths")
+		}
+		secretsMounts[operation] = canonicalMount
 	}
 	if err := validateNamePrefix(config.RolePrefix); err != nil {
 		return nil, fieldError(ErrInvalidConfiguration, "role_prefix", err.Error())
@@ -94,7 +111,7 @@ func New(config Config) (*Manager, error) {
 		authMount:      authMount,
 		rolePrefix:     config.RolePrefix,
 		policyPrefix:   config.PolicyPrefix,
-		awsMount:       awsMount,
+		secretsMounts:  secretsMounts,
 		requestTimeout: config.RequestTimeout,
 		clock:          config.Clock,
 		clientProvider: config.ClientProvider,

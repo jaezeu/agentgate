@@ -25,7 +25,7 @@ func run(arguments []string) error {
 	privateKeyPath := flags.String("private-key", "dispatcher-private.pem", "dispatcher Ed25519 private key")
 	repository := flags.String("repo", "", "repository identifier")
 	commitSHA := flags.String("commit-sha", "", "40-character Git commit SHA")
-	operation := flags.String("operation", string(grant.OperationTerraformPlan), "terraform-plan or terraform-apply")
+	operation := flags.String("operation", string(grant.OperationTerraformPlan), "terraform-plan, terraform-apply, or kubernetes-inspect")
 	environment := flags.String("environment", "sandbox", "target environment")
 	vaultRole := flags.String("vault-role", "", "requested Vault AWS role")
 	ttl := flags.Duration("ttl", 15*time.Minute, "grant lifetime")
@@ -37,8 +37,10 @@ func run(arguments []string) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if *operation != string(grant.OperationTerraformPlan) && *operation != string(grant.OperationTerraformApply) {
-		return errors.New("--operation must be terraform-plan or terraform-apply")
+	switch grant.Operation(*operation) {
+	case grant.OperationTerraformPlan, grant.OperationTerraformApply, grant.OperationKubernetesInspect:
+	default:
+		return errors.New("--operation must be terraform-plan, terraform-apply, or kubernetes-inspect")
 	}
 	if *ttl <= 0 || *ttl%time.Second != 0 {
 		return errors.New("--ttl must be a positive whole number of seconds")

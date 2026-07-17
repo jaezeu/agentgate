@@ -13,6 +13,7 @@ import (
 type AccessBinding struct {
 	RequestID     string
 	SPIFFEID      string
+	Operation     string
 	VaultRole     string
 	GrantedTTL    time.Duration
 	PolicyVersion string

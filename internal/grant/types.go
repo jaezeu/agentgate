@@ -9,8 +9,9 @@ import (
 type Operation string
 
 const (
-	OperationTerraformPlan  Operation = "terraform-plan"
-	OperationTerraformApply Operation = "terraform-apply"
+	OperationTerraformPlan     Operation = "terraform-plan"
+	OperationTerraformApply    Operation = "terraform-apply"
+	OperationKubernetesInspect Operation = "kubernetes-inspect"
 )
 
 // TaskGrant is dispatcher-signed task context. TTL is encoded in seconds.
