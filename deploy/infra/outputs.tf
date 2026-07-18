@@ -59,7 +59,7 @@ output "deployer_role_arn" {
 }
 
 output "vault_aws_broker_role_arn" {
-  description = "IRSA role used by Vault's AWS secrets engine to assume only the demo target role."
+  description = "IRSA role used by Vault to assume the demo target role and decrypt the auto-unseal key."
   value       = aws_iam_role.vault_broker.arn
 }
 
@@ -76,4 +76,9 @@ output "demo_bucket_name" {
 output "demo_bucket_prefix" {
   description = "Only S3 object prefix writable by the demo target role."
   value       = local.demo_s3_prefix
+}
+
+output "vault_unseal_kms_key_arn" {
+  description = "KMS key used by Vault's awskms auto-unseal."
+  value       = aws_kms_key.vault_unseal.arn
 }

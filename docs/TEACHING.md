@@ -30,7 +30,7 @@ By the end, students should be able to explain and demonstrate:
 - Use only the dedicated sandbox account. EKS, nodes, NAT, EBS, logs, and
   Terraform can incur charges. Destroy or explicitly hand off the sandbox.
 - Never paste a JWT-SVID, Vault token, AWS access key, secret key, session token,
-  unseal key, dispatcher private key, or approver token into a host shell,
+  recovery key, dispatcher private key, or approver token into a host shell,
   document, chat, or AgentGate request.
 - Do not `cat` JWT, Vault response, SVID private-key, or protected bootstrap
   files. Commands below retain sensitive values in mode-`0600` pod-local files
@@ -852,7 +852,7 @@ Choose exactly one end state:
 1. **Destroy:** follow [Reverse destroy](DEPLOY.md#reverse-destroy) while the
    cluster, Vault material, and AWS SSO session are still available.
 2. **Handoff:** record the named owner, AWS account, GitHub repository and
-   environments, current cost window, Vault unseal-material custodian, and an
+   environments, current cost window, Vault recovery-material custodian, and an
    explicit destruction deadline. The owner acknowledges that the sandbox is
    still billing.
 

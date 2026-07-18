@@ -47,11 +47,22 @@ helm template spire "${chart_dir}/spire-0.29.0.tgz" \
   --values "${DEPLOY_ROOT}/platform/helm-values/spire.yaml" \
   >"${output_dir}/spire.yaml"
 
+# Render the Terraform values template with the same placeholder identifiers
+# the platform root injects at apply time.
+vault_values="$(mktemp)"
+# The patterns match literal templatefile placeholders.
+# shellcheck disable=SC2016
+sed \
+  -e 's/\${aws_region}/ap-southeast-1/g' \
+  -e 's|\${unseal_kms_key_arn}|arn:aws:kms:ap-southeast-1:111122223333:key/00000000-0000-0000-0000-000000000000|g' \
+  "${DEPLOY_ROOT}/platform/helm-values/vault.yaml.tftpl" >"${vault_values}"
+
 helm template vault "${chart_dir}/vault-0.34.0.tgz" \
   --namespace vault \
-  --values "${DEPLOY_ROOT}/platform/helm-values/vault.yaml" \
+  --values "${vault_values}" \
   --set-string 'server.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::111122223333:role/agentgate-sandbox-vault-broker' \
   >"${output_dir}/vault.yaml"
+rm -f "${vault_values}"
 
 helm template agentgate-postgresql "${chart_dir}/postgresql-18.8.0.tgz" \
   --namespace agentgate-platform \

@@ -13,8 +13,9 @@
 > manual verification and must not be presented as observed until they are.
 
 > **Cost warning:** EKS control-plane hours, two `t3.medium` nodes, one NAT
-> gateway, public IPv4 addresses, EBS volumes, data transfer, and CloudWatch
-> logs can all incur charges. Load balancers would add
+> gateway, public IPv4 addresses, EBS volumes, data transfer, CloudWatch
+> logs, and the Vault auto-unseal KMS key can all incur charges. Load
+> balancers would add
 > cost if introduced later. Review current AWS pricing before apply.
 > **Destroy the sandbox when idle.**
 
@@ -558,10 +559,17 @@ kubectl get job agentgate-migrations-v2 -n agentgate-platform
 
 ## Initialize and bootstrap Vault
 
-Vault initialization and unseal material crosses a deliberate manual security
-boundary. Do not put it in Terraform, Kubernetes Secrets, shell history, chat,
-or CI logs. Production replaces this with KMS-backed auto-unseal and a formal
-key ceremony.
+Vault auto-unseals through the `awskms` seal. The infra root provisions a
+dedicated KMS key whose key policy separates administration (account root)
+from use (only the vault-broker IRSA role may encrypt/decrypt), and the
+platform root renders a `seal "awskms"` stanza into the server configuration
+from `helm-values/vault.yaml.tftpl`, so the effective config has one source
+of truth. No unseal keys exist. Initialization instead produces
+**recovery keys** and the initial root token; that material still crosses a
+manual security boundary. Do not put it in Terraform, Kubernetes Secrets,
+shell history, chat, or CI logs. In production, pass `-recovery-pgp-keys` so
+each recovery share is encrypted to a distinct custodian; this
+single-operator sandbox stores them in one protected file instead.
 
 Extract the public SPIRE CA bundle and start a TLS port-forward:
 
@@ -595,8 +603,8 @@ Initialize once:
 ```bash
 umask 077
 vault operator init \
-  -key-shares=3 \
-  -key-threshold=2 \
+  -recovery-shares=3 \
+  -recovery-threshold=2 \
   -format=json \
   >"${AGENTGATE_SECRET_DIR}/vault-init.json"
 chmod 0600 "${AGENTGATE_SECRET_DIR}/vault-init.json"
@@ -605,9 +613,10 @@ chmod 0600 "${AGENTGATE_SECRET_DIR}/vault-init.json"
 If `initialized` was already true, **do not run this command again**. Restore
 the original material or follow a documented recovery process.
 
-Use two different unseal keys from the protected file with interactive
-`vault operator unseal` prompts. Never put an unseal key on the command line.
-Then extract the initial root token only to another protected file:
+Vault unseals itself against KMS within seconds of initialization; no
+`vault operator unseal` step exists. Recovery keys cannot unseal Vault; they
+authorize recovery operations such as generating a new root token. Extract
+the initial root token only to another protected file:
 
 ```bash
 jq -r '.root_token' \
@@ -749,8 +758,10 @@ rm -f "${VAULT_TOKEN_FILE}"
 unset VAULT_TOKEN_FILE
 ```
 
-Keep unseal keys in approved protected storage until destroy. A Vault restart
-requires manual unseal in this sandbox.
+Keep recovery keys in approved protected storage until destroy. A Vault
+restart auto-unseals through KMS; losing the KMS key (or its IAM access)
+makes the Vault data unrecoverable, which is acceptable only for this
+disposable sandbox.
 
 Verify migration completion without printing a password:
 
@@ -1288,9 +1299,10 @@ This is a teaching sandbox, not production:
 - **SPIRE:** run multiple server replicas against a supported HA datastore,
   use production node attestation and key management, isolate agents, monitor
   registration changes, and test trust-bundle rotation.
-- **Vault:** run multiple HA replicas, KMS/HSM-backed auto-unseal, isolated
-  networks, tested Raft snapshots and restore, formal root-token lifecycle,
-  monitoring, and Vault Enterprise namespaces where required.
+- **Vault:** run multiple HA replicas, isolated networks, tested Raft
+  snapshots and restore, formal root-token lifecycle, monitoring, and Vault
+  Enterprise namespaces where required. KMS auto-unseal is already in place;
+  production adds key-loss recovery procedures around it.
 - **PostgreSQL:** use managed HA PostgreSQL with TLS, encryption, backups,
   point-in-time recovery, retention, connection pooling, monitoring, and
   tested restore.
@@ -1307,7 +1319,7 @@ can still cause damage within legitimately granted scope.
 
 ## Reverse destroy
 
-Destroy while the cluster, Vault unseal material, and AWS SSO session are
+Destroy while the cluster, Vault recovery material, and AWS SSO session are
 still available.
 
 The script:

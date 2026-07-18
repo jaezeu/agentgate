@@ -67,6 +67,10 @@ grep -q 'readinessProbe:' "${vault_manifest}" ||
   die "Vault readiness probe is missing"
 grep -q 'livenessProbe:' "${vault_manifest}" ||
   die "Vault liveness probe is missing"
+grep -q 'seal "awskms"' "${vault_manifest}" ||
+  die "Vault awskms seal stanza is not rendered in the server config"
+grep -q 'unseal_kms_key_arn' "${vault_terraform}" ||
+  die "Vault auto-unseal key wiring is missing from platform/vault.tf"
 
 grep -q 'registry-1.docker.io/bitnami/postgresql@sha256:db2312d9b243afa8c3b3f5496e478d17d0dff9791d06f3b93b9567abd86ae92f' \
   "${postgresql_manifest}" ||

@@ -95,6 +95,11 @@ server:
           node_id = "VAULT_RAFT_NODE_ID"
         }
 
+        seal "awskms" {
+          region     = "${aws_region}"
+          kms_key_id = "${unseal_kms_key_arn}"
+        }
+
   serviceAccount:
     create: true
     createSecret: false

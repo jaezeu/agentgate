@@ -55,7 +55,10 @@ resource "helm_release" "vault" {
   wait            = false
 
   values = [
-    file("${path.module}/helm-values/vault.yaml"),
+    templatefile("${path.module}/helm-values/vault.yaml.tftpl", {
+      aws_region         = local.aws_region
+      unseal_kms_key_arn = data.terraform_remote_state.infra.outputs.vault_unseal_kms_key_arn
+    }),
     yamlencode({
       server = {
         serviceAccount = {

@@ -46,7 +46,7 @@ if [[ "$(jq -r '.initialized' "${vault_status_file}")" != "true" ]]; then
   die "Vault is not initialized; follow the manual initialization boundary in docs/DEPLOY.md"
 fi
 if [[ "$(jq -r '.sealed' "${vault_status_file}")" != "false" ]]; then
-  die "Vault is sealed; unseal it manually before configuring deployment trust"
+  die "Vault is sealed; check the KMS auto-unseal (IRSA role and key access) before configuring deployment trust"
 fi
 
 VAULT_TOKEN="$(<"${VAULT_TOKEN_FILE}")"

@@ -145,8 +145,9 @@ CloudTrail.
 - **Affected component:** Single-replica Vault, PostgreSQL, SPIRE server storage,
   backups, TLS, unseal, and disaster recovery.
 - **Evidence/source checked:** Chart values and security contexts are statically
-  tested. The sandbox uses manual Vault unseal and a disposable storage policy;
-  PostgreSQL traffic is cluster-internal without database TLS.
+  tested. The sandbox uses KMS auto-unseal but a single Vault replica and a
+  disposable storage policy; PostgreSQL traffic is cluster-internal without
+  database TLS.
 - **Exact manual verification:** Exercise Raft and database backup/restore,
   node loss, trust-bundle rotation, certificate rotation, and recovery while
   preserving audit data.
@@ -154,8 +155,9 @@ CloudTrail.
   or loses decisions/audit records.
 - **Workaround:** None appropriate for production. Recreate the disposable
   sandbox from protected bootstrap material.
-- **Closure criterion:** Managed or HA services have encryption, automated
-  unseal, tested backup/restore, retention, monitoring, and documented RTO/RPO.
+- **Closure criterion:** Managed or HA services have encryption, tested
+  backup/restore, retention, monitoring, and documented RTO/RPO. Auto-unseal
+  is in place; the remaining work is replication and recovery.
 
 ### G-08: Dispatcher trust uses one PoC Ed25519 key
 
