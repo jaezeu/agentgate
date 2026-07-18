@@ -1,7 +1,7 @@
 variable "aws_region" {
-  description = "AWS region holding the Terraform state bucket and sandbox."
+  description = "AWS region for the sandbox and its pre-provisioned state bucket."
   type        = string
-  default     = "us-west-2"
+  default     = "ap-southeast-1"
 
   validation {
     condition     = can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$", var.aws_region))
@@ -69,17 +69,6 @@ variable "existing_github_oidc_provider_arn" {
       can(regex("^arn:[^:]+:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.existing_github_oidc_provider_arn))
     )
     error_message = "Provide the token.actions.githubusercontent.com provider ARN when create_github_oidc_provider is false."
-  }
-}
-
-variable "state_noncurrent_version_retention_days" {
-  description = "Days to retain noncurrent state object versions before expiry."
-  type        = number
-  default     = 90
-
-  validation {
-    condition     = var.state_noncurrent_version_retention_days >= 30 && var.state_noncurrent_version_retention_days <= 365
-    error_message = "state_noncurrent_version_retention_days must be between 30 and 365."
   }
 }
 

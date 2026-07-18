@@ -6,7 +6,7 @@ run "static_plan" {
 
   variables {
     state_bucket        = "agentgate-static-validation-tfstate"
-    state_bucket_region = "us-west-2"
+    state_bucket_region = "ap-southeast-1"
     application_image   = "ghcr.io/example/agentgate:v0.0.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
 
@@ -14,7 +14,7 @@ run "static_plan" {
     target = data.terraform_remote_state.infra
     values = {
       outputs = {
-        aws_region                         = "us-west-2"
+        aws_region                         = "ap-southeast-1"
         demo_bucket_name                   = "agentgate-demo-static"
         demo_bucket_prefix                 = "governed/"
         cluster_name                       = "agentgate-sandbox-eks"
@@ -115,7 +115,7 @@ run "static_plan" {
     condition = (
       contains(kubernetes_manifest.agent_sim_demo.manifest.spec.template.spec.containers[0].args, "--terraform-bin=/usr/local/bin/terraform") &&
       contains(kubernetes_manifest.agent_sim_demo.manifest.spec.template.spec.containers[0].args, "--terraform-work-root=/workspace") &&
-      contains(kubernetes_manifest.agent_sim_demo.manifest.spec.template.spec.containers[0].args, "--aws-region=us-west-2") &&
+      contains(kubernetes_manifest.agent_sim_demo.manifest.spec.template.spec.containers[0].args, "--aws-region=ap-southeast-1") &&
       contains(kubernetes_manifest.agent_sim_demo.manifest.spec.template.spec.containers[0].args, "--demo-bucket=agentgate-demo-static") &&
       contains(kubernetes_manifest.agent_sim_demo.manifest.spec.template.spec.containers[0].args, "--demo-prefix=governed/") &&
       contains(kubernetes_manifest.agent_sim_demo.manifest.spec.template.spec.containers[0].args, "--vault-tls-server-name=vault.vault.svc.cluster.local") &&

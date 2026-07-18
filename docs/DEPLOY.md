@@ -13,8 +13,8 @@
 > manual verification and must not be presented as observed until they are.
 
 > **Cost warning:** EKS control-plane hours, two `t3.medium` nodes, one NAT
-> gateway, public IPv4 addresses, EBS volumes, data transfer, CloudWatch logs,
-> and the state-bucket KMS key can all incur charges. Load balancers would add
+> gateway, public IPv4 addresses, EBS volumes, data transfer, and CloudWatch
+> logs can all incur charges. Load balancers would add
 > cost if introduced later. Review current AWS pricing before apply.
 > **Destroy the sandbox when idle.**
 
@@ -22,13 +22,15 @@
 
 There are exactly four independent Terraform roots:
 
-1. `deploy/bootstrap` — state bucket and GitHub OIDC deployment trust
+1. `deploy/bootstrap` (GitHub OIDC deployment trust)
 2. `deploy/infra`
 3. `deploy/platform`
 4. `deploy/agentgate`
 
 Apply in that order. Destroy in the exact reverse order. State for the three
-sandbox roots lives in one S3 bucket with native lock files:
+sandbox roots lives in one pre-existing S3 bucket with native lock files;
+each root carries a placeholder `backend "s3"` block completed by
+`terraform init -backend-config`:
 
 | Root | State | Execution |
 | --- | --- | --- |
@@ -37,10 +39,11 @@ sandbox roots lives in one S3 bucket with native lock files:
 | `deploy/platform` | `s3://<state-bucket>/platform.tfstate` | Operator or GitHub Actions OIDC |
 | `deploy/agentgate` | `s3://<state-bucket>/agentgate.tfstate` | Operator or GitHub Actions OIDC |
 
-The bootstrap root creates the versioned, KMS-encrypted state bucket, the
-`token.actions.githubusercontent.com` IAM OIDC provider, and one deployer
-role trusted only for this repository's `sandbox-plan` and `sandbox` GitHub
-environments. See
+The bootstrap root creates the `token.actions.githubusercontent.com` IAM
+OIDC provider and one deployer role trusted only for this repository's
+`sandbox-plan` and `sandbox` GitHub environments, through the community
+`terraform-module/github-oidc-provider/aws` module. The state bucket is
+pre-provisioned and not managed by Terraform. See
 [ADR-0001](adr/0001-deployment-control-plane.md) for the decision record.
 
 ## Deployment pipeline
@@ -56,8 +59,8 @@ flowchart LR
 
     subgraph AWS[AWS sandbox account]
         R[Deployer IAM role]
-        S[(S3 state bucket
-KMS + versioning + lockfile)]
+        S[(pre-existing S3 state bucket
+versioning + lockfile)]
         K[EKS cluster]
     end
 
@@ -114,8 +117,8 @@ All links in this section were checked on **2026-07-17**.
 Providers and community modules use pessimistic (`~>`) constraints; the
 committed `.terraform.lock.hcl` in each root pins the exact provider versions
 in use (dual-platform hashes) until `terraform init -upgrade` is run
-deliberately. Community modules from `terraform-aws-modules` replace the
-hand-rolled VPC, EKS, state-bucket, and state-KMS resources.
+deliberately. Community modules replace the hand-rolled VPC, EKS, and GitHub
+OIDC resources.
 
 | Component | Constraint | Official contract checked |
 | --- | --- | --- |
@@ -125,10 +128,8 @@ hand-rolled VPC, EKS, state-bucket, and state-KMS resources.
 | Helm provider | `~> 3.2` | [Provider releases](https://github.com/hashicorp/terraform-provider-helm/releases) |
 | `terraform-aws-modules/vpc` | `~> 6.6` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws) |
 | `terraform-aws-modules/eks` | `~> 21.24` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws) |
-| `terraform-aws-modules/s3-bucket` | `~> 5.14` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/s3-bucket/aws) |
-| `terraform-aws-modules/kms` | `~> 4.2` | [Module registry](https://registry.terraform.io/modules/terraform-aws-modules/kms/aws) |
+| `terraform-module/github-oidc-provider` | `~> 2.2` | [Module registry](https://registry.terraform.io/modules/terraform-module/github-oidc-provider/aws) |
 | Vault provider | `~> 5.10` | [Provider release](https://github.com/hashicorp/terraform-provider-vault/releases/tag/v5.10.1), [resource docs at tag](https://github.com/hashicorp/terraform-provider-vault/tree/v5.10.1/docs/resources) |
-| TLS provider | `4.3.0` | [Provider release](https://github.com/hashicorp/terraform-provider-tls/releases/tag/v4.3.0), [`tls_certificate`](https://registry.terraform.io/providers/hashicorp/tls/4.3.0/docs/data-sources/certificate) |
 
 AWS arguments were checked against the `vpc`, `subnet`, `internet_gateway`,
 `route_table`, `route_table_association`, `eip`, `nat_gateway`, `eks_cluster`,
@@ -250,6 +251,8 @@ shared production account.
 Required:
 
 - AWS sandbox account and an AWS SSO role for the human operator;
+- an existing S3 bucket for Terraform state (versioned and encrypted;
+  this reference does not create it);
 - a GitHub repository (this one or a fork) if CI-driven deploys and drift
   detection are wanted; local-only operation needs no GitHub setup;
 - an OCI registry for the locally built application image;
@@ -266,7 +269,8 @@ Set non-secret context:
 
 ```bash
 export AGENTGATE_AWS_ACCOUNT_ID='111122223333'
-export AGENTGATE_AWS_REGION='us-west-2'
+export AGENTGATE_AWS_REGION='ap-southeast-1'
+export AGENTGATE_STATE_BUCKET='replace-me-tfstate'
 export AGENTGATE_CLUSTER_NAME='agentgate-sandbox-eks'
 export AGENTGATE_SECRET_DIR="${HOME}/.agentgate-sandbox-secrets"
 export AGENTGATE_ACKNOWLEDGE_COSTS='yes'
@@ -274,7 +278,9 @@ mkdir -p "${AGENTGATE_SECRET_DIR}"
 chmod 0700 "${AGENTGATE_SECRET_DIR}"
 ```
 
-`AGENTGATE_STATE_BUCKET` is exported after the bootstrap apply below.
+`AGENTGATE_STATE_BUCKET` is the existing state bucket; every root points its
+`backend "s3"` placeholder at it through
+`terraform init -backend-config` (`deploy/scripts/init-root.sh`).
 
 Expected: no command prints credential material. The secret directory mode is
 `drwx------`.
@@ -306,18 +312,17 @@ test -z "${AWS_SECRET_ACCESS_KEY:-}"
 test -z "${AWS_SESSION_TOKEN:-}"
 ```
 
-`deploy/scripts/preflight.sh --local` runs after the bootstrap apply exports
-the state bucket name.
+`deploy/scripts/preflight.sh --local` runs after the bootstrap apply.
 
-## Bootstrap the state backend and deployment trust
+## Bootstrap the deployment trust
 
-The bootstrap root creates the S3 state bucket (versioned, KMS-encrypted,
-public access blocked, TLS-only, native lock files), the GitHub Actions IAM
-OIDC provider, and one deployer role trusted only for this repository's
-`sandbox-plan` and `sandbox` GitHub environments. It deliberately keeps local
-state because it creates the backend everything else uses; the state file
-contains only public identifiers. Keep it with the operator bootstrap
-material.
+The bootstrap root creates the GitHub Actions IAM OIDC provider and one
+deployer role trusted only for this repository's `sandbox-plan` and `sandbox`
+GitHub environments, using the community
+`terraform-module/github-oidc-provider/aws` module. The state bucket is
+assumed to exist already and is not managed by any root. Bootstrap keeps
+local state; the state file contains only public identifiers. Keep it with
+the operator bootstrap material.
 
 ```bash
 terraform -chdir=deploy/bootstrap init -input=false
@@ -336,9 +341,6 @@ provider, add `-var create_github_oidc_provider=false` and
 Record the non-secret outputs and run preflight:
 
 ```bash
-export AGENTGATE_STATE_BUCKET="$(
-  terraform -chdir=deploy/bootstrap output -raw state_bucket
-)"
 export AGENTGATE_DEPLOYER_ROLE_ARN="$(
   terraform -chdir=deploy/bootstrap output -raw deployer_role_arn
 )"
@@ -369,7 +371,7 @@ In the repository settings:
 2. Create Actions variables:
 
 ```text
-AGENTGATE_STATE_BUCKET            = <bootstrap output state_bucket>
+AGENTGATE_STATE_BUCKET            = <existing state bucket name>
 AGENTGATE_AWS_REGION              = <sandbox region>
 AGENTGATE_DEPLOYER_ROLE_ARN       = <bootstrap output deployer_role_arn>
 AGENTGATE_EKS_PUBLIC_ACCESS_CIDRS = <JSON list of allowed CIDRs>
@@ -1331,27 +1333,21 @@ Expected final lines:
 
 ```text
 Reverse destroy completed: agentgate, platform, then infra.
-The state bucket, KMS key, OIDC provider, and deployer role remain.
+The state bucket, OIDC provider, and deployer role remain.
 ```
 
 The demo S3 bucket uses sandbox-only `force_destroy=true`, including versions.
 The gp3 StorageClass uses `Delete` reclaim behavior. The script refuses to
 destroy EKS while an EBS-backed Kubernetes PV remains.
 
-Finally, remove the deployment trust and state backend. The state bucket
-must be emptied first because it is deliberately not `force_destroy`:
+Finally, remove the deployment trust. The pre-existing state bucket is not
+managed by Terraform and stays in place; delete the sandbox state objects
+from it if the sandbox is being retired for good:
 
 ```bash
-aws s3 rm "s3://${AGENTGATE_STATE_BUCKET}" --recursive
-aws s3api list-object-versions \
-  --bucket "${AGENTGATE_STATE_BUCKET}" \
-  --query '{Objects: [Versions,DeleteMarkers][][].{Key:Key,VersionId:VersionId}}' \
-  --output json >"${AGENTGATE_SECRET_DIR}/state-versions.json"
-jq -e '.Objects == null or (.Objects | length) == 0' \
-  "${AGENTGATE_SECRET_DIR}/state-versions.json" >/dev/null ||
-  aws s3api delete-objects \
-    --bucket "${AGENTGATE_STATE_BUCKET}" \
-    --delete "file://${AGENTGATE_SECRET_DIR}/state-versions.json"
+aws s3 rm "s3://${AGENTGATE_STATE_BUCKET}/infra.tfstate"
+aws s3 rm "s3://${AGENTGATE_STATE_BUCKET}/platform.tfstate"
+aws s3 rm "s3://${AGENTGATE_STATE_BUCKET}/agentgate.tfstate"
 terraform -chdir=deploy/bootstrap destroy -input=false \
   -var "aws_region=${AGENTGATE_AWS_REGION}" \
   -var 'github_repository=replace-me/agentgate'
@@ -1373,9 +1369,9 @@ aws resourcegroupstaggingapi get-resources \
 
 Expected: EKS returns `ResourceNotFoundException`; the tag query is empty.
 Also review EC2 Volumes, Elastic IPs, NAT Gateways, S3, IAM roles, CloudWatch
-logs, KMS keys pending deletion, and billing. KMS deletion has a seven-day
-waiting period by design and should show as pending, not active
-infrastructure.
+logs, KMS keys pending deletion, and billing. The EKS secrets-encryption KMS
+key has a seven-day deletion waiting period by design and should show as
+pending, not active infrastructure.
 
 Securely remove local sandbox bootstrap material only after teardown evidence
 is complete:

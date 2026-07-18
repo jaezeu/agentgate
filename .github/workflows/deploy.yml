@@ -5,7 +5,7 @@ name: Deploy
 # Vault pass exchanges the job's OIDC token for a short-lived Vault token.
 #
 # Required repository/environment variables (Settings -> Variables):
-#   AGENTGATE_STATE_BUCKET            state bucket from deploy/bootstrap
+#   AGENTGATE_STATE_BUCKET            pre-existing Terraform state bucket
 #   AGENTGATE_AWS_REGION              sandbox region
 #   AGENTGATE_DEPLOYER_ROLE_ARN       deployer role from deploy/bootstrap
 #   AGENTGATE_EKS_PUBLIC_ACCESS_CIDRS JSON list for the infra root

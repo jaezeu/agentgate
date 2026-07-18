@@ -72,7 +72,7 @@ remaining_pvs="$(kubectl get pv -o json | jq '[.items[] | select(.spec.csi.drive
 destroy_root infra
 
 note "Reverse destroy completed: agentgate, platform, then infra."
-note "The state bucket, KMS key, OIDC provider, and deployer role remain."
+note "The state bucket, OIDC provider, and deployer role remain."
 note "To remove them: empty s3://${AGENTGATE_STATE_BUCKET}, then run"
 note "  terraform -chdir=deploy/bootstrap destroy"
 note "Review AWS Resource Groups/Tag Editor and billing for residual AgentGate-tagged resources."

@@ -24,11 +24,12 @@ this sandbox would be metered on an external SaaS.
 
 ## Decision
 
-1. **State lives in S3.** A new `deploy/bootstrap` root (local state,
-   contains only public identifiers) creates one versioned, KMS-encrypted,
-   public-access-blocked, TLS-only state bucket. Every root uses a partial
-   `backend "s3"` block with `use_lockfile = true` (native S3 locking; no
-   DynamoDB table). Cross-root wiring uses `terraform_remote_state` over S3.
+1. **State lives in S3.** A pre-existing, versioned state bucket holds all
+   root state; Terraform does not manage the bucket itself. Every root uses a
+   placeholder `backend "s3"` block completed by
+   `terraform init -backend-config`, with `use_lockfile = true` (native S3
+   locking; no DynamoDB table). Cross-root wiring uses
+   `terraform_remote_state` over S3.
 2. **CI deploys through GitHub Actions OIDC.** The bootstrap root creates
    the `token.actions.githubusercontent.com` IAM OIDC provider and one
    deployer role trusted only for this repository's `sandbox-plan` and
@@ -74,23 +75,25 @@ boundary, and Terraform-managed charts instead of GitOps.
 ## Amendment (2026-07-18): community modules and pessimistic constraints
 
 The hand-rolled VPC, EKS (cluster, node group, IAM, KMS, log group, OIDC
-provider, add-ons, access entries), state bucket, and state KMS resources are
-replaced by `terraform-aws-modules` community modules (`vpc ~> 6.6`,
-`eks ~> 21.24`, `s3-bucket ~> 5.14`, `kms ~> 4.2`), cutting the infra root by
-roughly two thirds. Provider and module constraints are pessimistic (`~>`);
+provider, add-ons, access entries), and GitHub OIDC trust resources are
+replaced by community modules (`terraform-aws-modules/vpc ~> 6.6`,
+`terraform-aws-modules/eks ~> 21.24`,
+`terraform-module/github-oidc-provider ~> 2.2`), cutting the infra root by
+roughly two thirds. The GitHub OIDC module receives fully qualified
+environment subjects (`owner/repo:environment:<name>`), which it passes
+through verbatim, so the trust policy still matches only the two exact
+GitHub environments. Provider and module constraints are pessimistic (`~>`);
 reproducibility comes from the committed dual-platform
 `.terraform.lock.hcl` files, which pin exact provider versions until
-`terraform init -upgrade` is run deliberately. Two deliberate exceptions stay
-as raw resources: the GitHub OIDC provider and deployer role trust policy
-(the security boundary of the deployment model — every claim condition
-should be reviewable in place), and the demo-target/Vault-broker/add-on IRSA
-IAM (bespoke narrow policies where a module would obscure the scope).
+`terraform init -upgrade` is run deliberately. One deliberate exception
+stays as raw resources: the demo-target/Vault-broker/add-on IRSA IAM
+(bespoke narrow policies where a module would obscure the scope).
 
 ## Consequences
 
 - `deploy/bootstrap` is a new root with local state; destroying it removes
-  deployment trust and the state bucket and is documented as the final
-  teardown step.
+  deployment trust and is documented as the final teardown step. The state
+  bucket is pre-provisioned and never destroyed by Terraform.
 - The EKS public endpoint allowlist gains an explicit
   `allow_public_cluster_endpoint` acknowledgment: GitHub-hosted runners have
   broad egress, so CI applies of cluster-touching roots need either
