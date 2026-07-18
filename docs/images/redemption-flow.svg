@@ -145,19 +145,19 @@
   <!-- ======================= step captions ======================= -->
   <rect x="30" y="566" width="1120" height="46" rx="9" fill="#0f172a" stroke="#1e293b"/>
   <g font-size="13.5" fill="#cbd5e1">
-    <text x="590" y="594" text-anchor="middle" opacity="0">1 · A human asks the dispatcher for a task — accountability starts here (on_behalf_of)
+    <text x="590" y="594" text-anchor="middle" opacity="0">1 · A human asks the dispatcher for a task, accountability starts here (on_behalf_of)
       <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.01;0.1;0.115;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
     <text x="590" y="594" text-anchor="middle" opacity="0">2 · The dispatcher signs the grant: repo, commit, operation, environment, TTL, single-use nonce
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.115;0.13;0.2;0.215;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
-    <text x="590" y="594" text-anchor="middle" opacity="0">3 · SPIRE attests the pod and issues its short-lived X509-SVID — proof of what is running, and where
+    <text x="590" y="594" text-anchor="middle" opacity="0">3 · SPIRE attests the pod and issues its short-lived X509-SVID, proof of what is running, and where
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.215;0.23;0.295;0.31;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
     <text x="590" y="594" text-anchor="middle" opacity="0">4 · Two proofs over mTLS: SVID + signed grant → OPA default-deny policy → append-only audit with the policy's SHA-256
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.31;0.325;0.415;0.43;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
-    <text x="590" y="594" text-anchor="middle" opacity="0">5 · Production apply parks as pending_approval — a human decides on a separately authenticated rail
+    <text x="590" y="594" text-anchor="middle" opacity="0">5 · Production apply parks as pending_approval, a human decides on a separately authenticated rail
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.43;0.445;0.535;0.55;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
     <text x="590" y="594" text-anchor="middle" opacity="0">6 · On allow: AgentGate writes ONE Vault role + ONE read-only policy, bound to the exact SPIFFE ID, TTL-capped
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.55;0.565;0.655;0.67;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
-    <text x="590" y="594" text-anchor="middle" opacity="0">7 · The runner logs into Vault ITSELF with a 5-minute JWT-SVID — Vault's audit log names the agent, not a broker
+    <text x="590" y="594" text-anchor="middle" opacity="0">7 · The runner logs into Vault ITSELF with a 5-minute JWT-SVID, Vault's audit log names the agent, not a broker
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.67;0.685;0.775;0.79;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
     <text x="590" y="594" text-anchor="middle" opacity="0">8 · Vault assumes the scoped AWS role (session = request_id) and returns STS directly to the runner's child process
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.79;0.805;0.9;0.915;1" dur="21s" begin="master.begin" repeatCount="indefinite"/></text>
@@ -171,6 +171,6 @@
     <circle cx="168" cy="546" r="4.5" fill="#f59e0b"/><text x="178" y="550">signed task grant</text>
     <circle cx="292" cy="546" r="4.5" fill="#3b82f6"/><text x="302" y="550">control plane (credential-free)</text>
     <circle cx="478" cy="546" r="4.5" fill="#a855f7"/><text x="488" y="550">human approval</text>
-    <circle cx="596" cy="546" r="4.5" fill="#f87171"/><text x="606" y="550">credential data plane — never touches AgentGate</text>
+    <circle cx="596" cy="546" r="4.5" fill="#f87171"/><text x="606" y="550">credential data plane, never touches AgentGate</text>
   </g>
 </svg>

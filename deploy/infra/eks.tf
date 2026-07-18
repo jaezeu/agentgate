@@ -1,10 +1,8 @@
 locals {
   eks_admin_policy_arn = "arn:${data.aws_partition.current.partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
-  # EKS access entries for the identities that operate this sandbox. The
-  # deployer role (created by deploy/bootstrap and assumed by GitHub Actions
-  # through OIDC, or by an operator applying locally) needs cluster-admin so
-  # the platform and agentgate roots can manage in-cluster resources.
+  # The deployer role needs cluster-admin so the platform and agentgate
+  # roots can manage in-cluster resources.
   cluster_admin_access_entries = merge(
     {
       deployer = {
@@ -92,7 +90,7 @@ module "eks" {
       resolve_conflicts_on_update = "PRESERVE"
     }
     aws-ebs-csi-driver = {
-      # TODO(verify): confirm v1.62.0-eksbuild.1 is offered for EKS 1.36 in the operator's region; AWS does not publish a static compatibility table for this add-on.
+      # TODO(verify): confirm v1.62.0-eksbuild.1 exists for EKS 1.36 in ap-southeast-1.
       addon_version               = "v1.62.0-eksbuild.1"
       most_recent                 = false
       service_account_role_arn    = aws_iam_role.ebs_csi.arn

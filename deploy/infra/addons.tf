@@ -1,6 +1,5 @@
-# IRSA roles consumed by the managed add-ons configured in module.eks. The
-# trust policies are deliberately explicit: each binds one exact system
-# service account through the cluster's OIDC provider.
+# IRSA roles for the managed add-ons; each trust policy binds one exact
+# system service account through the cluster's OIDC provider.
 
 locals {
   eks_oidc_provider_host = module.eks.oidc_provider

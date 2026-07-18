@@ -2,7 +2,7 @@
 
 **Secure infrastructure access for AI agents.** AgentGate is a SPIFFE-native,
 credential-blind access broker: it lets an AI agent running inside an attested
-workload obtain narrow, short-lived cloud access for one signed task — without
+workload obtain narrow, short-lived cloud access for one signed task, without
 ever holding a permanent credential, and without the broker ever touching a
 secret. It is for platform engineers, security teams, and anyone designing
 governed runners in attestable infrastructure.
@@ -12,7 +12,7 @@ governed runners in attestable infrastructure.
 </p>
 
 **The problem.** Companies are letting AI agents modify Terraform, operate
-pipelines, inspect clusters, and create cloud resources — usually by
+pipelines, inspect clusters, and create cloud resources, usually by
 inheriting human credentials, broad service accounts, or long-lived API keys.
 **The boundary AgentGate enforces:** SPIFFE/SPIRE proves *what is running*;
 a dispatcher-signed grant proves *what it was asked to do*; AgentGate
@@ -62,7 +62,7 @@ employee laptop into an attested runner.
 
 Every allowed request binds one Vault role and one read-only
 `<mount>/creds/<role>` path. Which mount serves an operation is an **access
-profile** — the extension point that turns one broker into many lanes:
+profile**, the extension point that turns one broker into many lanes:
 
 | Operation | Vault engine | Status |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ profile** — the extension point that turns one broker into many lanes:
 The real-Vault integration test proves cross-profile isolation: a
 kubernetes-lane token cannot read the AWS credential path, and vice versa.
 Adding a lane (databases, SSH, internal APIs) is one profile entry plus
-policy — the credential-blind contract does not change.
+policy; the credential-blind contract does not change.
 
 ## Architecture
 
@@ -258,9 +258,9 @@ Use a dedicated account and read the full [deployment guide](docs/DEPLOY.md);
 the guide deliberately exposes cost and manual security boundaries rather than
 hiding them in a one-command script.
 
-1. Complete [prerequisites](docs/DEPLOY.md#prerequisites) and apply
-   `deploy/bootstrap` (S3 state backend plus GitHub OIDC deployment trust).
-   Do not create static AWS keys.
+1. Complete [prerequisites](docs/DEPLOY.md#prerequisites), including an
+   existing S3 state bucket, and apply `deploy/bootstrap` (GitHub OIDC
+   deployment trust). Do not create static AWS keys.
 2. Run [static validation](docs/DEPLOY.md#static-validation-before-any-plan).
 3. Apply [infrastructure](docs/DEPLOY.md#apply-layer-1-infrastructure).
 4. Apply and initialize the [platform](docs/DEPLOY.md#apply-layer-2-platform-first-pass),
@@ -294,7 +294,7 @@ decision record.
 | `internal/audit` | Immutable credential-free audit records and forward migrations |
 | `policies` | Embedded default-deny Rego and tests |
 | `dashboard` | OIDC React operations UI |
-| `deploy/bootstrap` | S3 state backend, KMS, and GitHub OIDC deployment trust |
+| `deploy/bootstrap` | GitHub OIDC deployment trust for CI applies |
 | `deploy/infra` | VPC, EKS, demo IAM target, and tagged S3 target |
 | `deploy/platform` | SPIRE, Vault, PostgreSQL, and Vault/AWS configuration |
 | `deploy/agentgate` | AgentGate, identity registrations, and suspended demo Jobs |
@@ -331,6 +331,7 @@ Then run the dashboard and deployment checks from the local quickstart. CI also:
 
 ## Reference documentation
 
+- [Usage and implementation guide](docs/USAGE.md)
 - [Architecture and invariants](docs/ARCHITECTURE.md)
 - [AWS/EKS deployment and manual verification](docs/DEPLOY.md)
 - [Ranked known gaps](docs/KNOWN-GAPS.md)
