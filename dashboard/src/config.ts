@@ -37,13 +37,16 @@ export function loadConfig(
   environment: Environment = import.meta.env,
   origin = window.location.origin,
 ): AppConfig {
+  // The trailing slash matters: the API client resolves paths relative to
+  // this base, and relative URL resolution drops the last path segment of
+  // a base like "https://host/api" (turning "/api/v1/..." into "/v1/...").
   const apiBaseUrl = absoluteUrl(
     typeof environment.VITE_AGENTGATE_API_BASE_URL === 'string'
       ? environment.VITE_AGENTGATE_API_BASE_URL
       : '/',
     origin,
     'VITE_AGENTGATE_API_BASE_URL',
-  )
+  ).replace(/\/?$/, '/')
   const authMode = environment.VITE_AUTH_MODE ?? 'oidc'
 
   if (authMode === 'mock') {

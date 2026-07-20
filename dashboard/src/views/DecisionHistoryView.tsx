@@ -684,6 +684,7 @@ export function DecisionHistoryView() {
           <Pagination
             offset={query.data.value.pagination.offset}
             limit={query.data.value.pagination.limit}
+            count={query.data.value.requests.length}
             hasMore={query.data.value.pagination.has_more}
             onPage={setOffset}
           />

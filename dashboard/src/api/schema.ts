@@ -27,6 +27,7 @@ export const bindingValues = [
 export const operationValues = [
   'terraform-plan',
   'terraform-apply',
+  'kubernetes-inspect',
 ] as const
 export const eventTypeValues = [
   'grant_verified',

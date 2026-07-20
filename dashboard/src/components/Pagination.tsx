@@ -1,16 +1,18 @@
 export function Pagination({
   offset,
   limit,
+  count,
   hasMore,
   onPage,
 }: {
   offset: number
   limit: number
+  count: number
   hasMore: boolean
   onPage(offset: number): void
 }) {
   const start = offset + 1
-  const end = offset + limit
+  const end = offset + count
 
   return (
     <nav className="pagination" aria-label="Results pages">
@@ -23,7 +25,9 @@ export function Pagination({
         Previous
       </button>
       <span aria-live="polite">
-        Showing positions {start}-{end}
+        {count === 0
+          ? 'No results on this page'
+          : `Showing positions ${start}-${end}`}
       </span>
       <button
         className="button"

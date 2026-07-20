@@ -24,6 +24,11 @@ export function Dialog({
   const titleId = useId()
   const descriptionId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
+  // Parents recreate onClose on every render (their views re-render each
+  // clock tick); reading it through a ref keeps the focus-trap effect
+  // mount-only so it does not steal focus back on every tick.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null
@@ -34,7 +39,7 @@ export function Dialog({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         event.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab' || !dialog) return
@@ -57,7 +62,7 @@ export function Dialog({
       document.removeEventListener('keydown', onKeyDown)
       previouslyFocused?.focus()
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div className="dialog-backdrop">
