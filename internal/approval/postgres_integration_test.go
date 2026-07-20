@@ -188,6 +188,37 @@ func TestPostgresStoresLifecycleAndRace(t *testing.T) {
 		t.Fatalf("RecordRevocation() = %#v, error %v", revoked.Revocation, err)
 	}
 
+	revokedPending := pendingRecord(
+		"00000000-0000-4000-8000-000000000102",
+		"request-nonce-102",
+		now,
+	)
+	if _, created, err := requests.Create(ctx, revokedPending); err != nil || !created {
+		t.Fatalf("Create(revoked pending) = created %v, error %v; want true, nil", created, err)
+	}
+	if _, err := requests.RecordRevocation(
+		ctx,
+		revokedPending.AccessRequest.RequestID,
+		vaultmgr.RevocationReport{RequestID: revokedPending.AccessRequest.RequestID},
+		now.Add(4*time.Second),
+	); err != nil {
+		t.Fatalf("RecordRevocation(pending) error = %v", err)
+	}
+	afterRevoke, won, claim, err := requests.Decide(
+		ctx,
+		revokedPending.AccessRequest.RequestID,
+		approval.ApprovalApproved,
+		"approver@example.test",
+		"approved after revocation",
+		now.Add(5*time.Second),
+	)
+	if !errors.Is(err, approval.ErrConflict) || won || claim {
+		t.Fatalf("Decide(after revocation) = won %v, claim %v, error %v; want conflict", won, claim, err)
+	}
+	if afterRevoke.BindingState != approval.BindingRevoked {
+		t.Fatalf("binding state after revoked approval attempt = %q, want revoked", afterRevoke.BindingState)
+	}
+
 	audits := audit.NewPostgresStore(db)
 	taskGrant := record.AccessRequest.TaskGrant
 	taskGrant.Signature = "must-not-be-persisted"

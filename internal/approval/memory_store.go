@@ -93,6 +93,9 @@ func (s *MemoryStore) Decide(_ context.Context, requestID string, next ApprovalS
 	if !ok {
 		return Record{}, false, false, ErrNotFound
 	}
+	if record.RevokedAt != nil {
+		return cloneRecord(record), false, false, ErrConflict
+	}
 	if record.Approval.State == next {
 		return cloneRecord(record), false, false, nil
 	}

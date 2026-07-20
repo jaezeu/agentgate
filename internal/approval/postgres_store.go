@@ -18,7 +18,9 @@ import (
 
 const (
 	defaultListLimit = 50
-	maxListLimit     = 100
+	// maxListLimit is one above the API's maximum page size so the
+	// transport layer can fetch an extra row as its has-more probe.
+	maxListLimit     = 101
 	maxListOffset    = 10_000
 	maxActorLength   = 512
 	maxReasonLength  = 4_096
@@ -291,18 +293,30 @@ func (s *PostgresStore) Decide(
 	var version int64
 	var grantIssuedAt time.Time
 	var requestedTTL int64
+	var revokedAt sql.NullTime
 	err = transaction.QueryRowContext(ctx, `
-		SELECT ap.state, ap.version, ar.grant_issued_at, ar.requested_ttl_seconds
+		SELECT ap.state, ap.version, ar.grant_issued_at, ar.requested_ttl_seconds, ar.revoked_at
 		FROM approvals ap
 		JOIN access_requests ar ON ar.request_id = ap.request_id
 		WHERE ap.request_id = $1
 		FOR UPDATE OF ap, ar
-	`, requestID).Scan(&current, &version, &grantIssuedAt, &requestedTTL)
+	`, requestID).Scan(&current, &version, &grantIssuedAt, &requestedTTL, &revokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, false, false, ErrNotFound
 	}
 	if err != nil {
 		return Record{}, false, false, fmt.Errorf("lock approval request: %w", err)
+	}
+
+	if revokedAt.Valid {
+		if err := transaction.Commit(); err != nil {
+			return Record{}, false, false, fmt.Errorf("commit revoked approval conflict: %w", err)
+		}
+		stored, getErr := s.Get(ctx, requestID)
+		if getErr != nil {
+			return Record{}, false, false, getErr
+		}
+		return stored, false, false, ErrConflict
 	}
 
 	if current == next {
