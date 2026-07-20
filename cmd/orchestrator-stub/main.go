@@ -37,6 +37,9 @@ func run(arguments []string) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
+	if flags.NArg() > 0 {
+		return fmt.Errorf("orchestrator-stub does not accept positional arguments: %q", flags.Args())
+	}
 	switch grant.Operation(*operation) {
 	case grant.OperationTerraformPlan, grant.OperationTerraformApply, grant.OperationKubernetesInspect:
 	default:

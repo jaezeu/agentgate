@@ -112,10 +112,6 @@ func runRevokeWith(
 	if int64(len(body)) > maxCLIResponseBytes {
 		return errors.New("revoke response exceeds size limit")
 	}
-	mediaType, _, mediaTypeErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if mediaTypeErr != nil || mediaType != "application/json" {
-		return errors.New("revoke response must use application/json")
-	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		var errorResponse commandErrorResponse
 		if json.Unmarshal(body, &errorResponse) == nil && errorResponse.Error.Code != "" {
@@ -126,6 +122,10 @@ func runRevokeWith(
 			)
 		}
 		return fmt.Errorf("revoke failed with HTTP %d", response.StatusCode)
+	}
+	mediaType, _, mediaTypeErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if mediaTypeErr != nil || mediaType != "application/json" {
+		return errors.New("revoke response must use application/json")
 	}
 
 	var result revokeCommandResponse

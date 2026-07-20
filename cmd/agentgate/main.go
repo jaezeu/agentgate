@@ -15,6 +15,9 @@ const version = "dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		slog.Error("agentgate command failed", "error", err)
 		os.Exit(1)
 	}
@@ -50,6 +53,9 @@ func runGrantKeygen(arguments []string) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
+	if flags.NArg() > 0 {
+		return fmt.Errorf("grant-keygen does not accept positional arguments: %q", flags.Args())
+	}
 
 	publicKey, privateKey, err := grant.GenerateKeyPair(nil)
 	if err != nil {
@@ -68,6 +74,7 @@ func runGrantKeygen(arguments []string) error {
 	}
 	if err := writeKeyFile(*privateKeyPath, privatePEM, 0o600, *force); err != nil {
 		_ = os.Remove(*publicKeyPath)
+		_ = os.Remove(*privateKeyPath)
 		return err
 	}
 	fmt.Printf("wrote public key %s and private key %s\n", filepath.Clean(*publicKeyPath), filepath.Clean(*privateKeyPath))
@@ -84,6 +91,14 @@ func writeKeyFile(path string, data []byte, mode os.FileMode, force bool) error 
 	file, err := os.OpenFile(path, openFlags, mode) // #nosec G304 -- output path is an explicit CLI argument.
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
+	}
+	// The mode passed to OpenFile only applies when the file is created;
+	// an existing file replaced via -force keeps its old permissions.
+	if force {
+		if err := file.Chmod(mode); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("set permissions on %s: %w", path, err)
+		}
 	}
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
