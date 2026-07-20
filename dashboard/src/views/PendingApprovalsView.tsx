@@ -39,6 +39,7 @@ type DecisionAction = 'approve' | 'deny'
 type DecisionOutcome =
   | { kind: 'stored'; state: ApprovalState }
   | { kind: 'race'; state: ApprovalState }
+  | { kind: 'revoked' }
 
 function PendingRequestId({ requestId }: { requestId: string }) {
   return (
@@ -73,7 +74,13 @@ function DecisionDialog({
         }
       } catch (error) {
         if (error instanceof ApiError && error.status === 409) {
+          // The server also answers 409 when the request was revoked while
+          // its approval state is still pending; that is not a decision
+          // race and must not be reported as one.
           const stored = await api.getRequest(request.request_id)
+          if (stored.value.request.revoked_at) {
+            return { kind: 'revoked' }
+          }
           return {
             kind: 'race',
             state: stored.value.request.approval_state,
@@ -176,6 +183,12 @@ function DecisionDialog({
         <p className="callout callout-warning" role="status">
           Another operator won this decision race. Stored server state:{' '}
           {approvalLabel(mutation.data.state)}.
+        </p>
+      )}
+      {mutation.data?.kind === 'revoked' && (
+        <p className="callout callout-warning" role="status">
+          This request was revoked before the decision was recorded, so no
+          decision was applied.
         </p>
       )}
     </Dialog>
