@@ -53,6 +53,13 @@ spire-server:
   enabled: true
   kind: statefulset
   replicaCount: 1
+  # PEM makes the publisher write the spire-bundle ConfigMap under the
+  # bundle.crt key, which deploy/platform/vault.tf (oidc_discovery_ca_pem)
+  # and deploy/scripts/ci-vault-env.sh read; the chart default (spiffe)
+  # publishes only JWKS-format bundle.spiffe, which neither consumer accepts.
+  bundlePublisher:
+    k8sConfigMap:
+      format: pem
   image:
     tag: "1.15.1"
   serviceAccount:
