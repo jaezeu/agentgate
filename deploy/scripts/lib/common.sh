@@ -51,14 +51,53 @@ verify_aws_identity() {
 
 verify_kubernetes_context() {
   require_env AGENTGATE_CLUSTER_NAME
+  require_env AGENTGATE_AWS_REGION
 
-  local current_context cluster_server
+  local current_context cluster_server expected_endpoint
   current_context="$(kubectl config current-context)"
   cluster_server="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
   [[ -n "${cluster_server}" ]] || die "current Kubernetes context has no cluster server"
 
+  # The guard exists to stop secrets from landing on whatever cluster the
+  # kubeconfig happens to point at, so the current context's server must be
+  # the named EKS cluster's actual endpoint, not merely reachable.
+  expected_endpoint="$(aws eks describe-cluster \
+    --name "${AGENTGATE_CLUSTER_NAME}" \
+    --region "${AGENTGATE_AWS_REGION}" \
+    --query 'cluster.endpoint' \
+    --output text)"
+  [[ -n "${expected_endpoint}" && "${expected_endpoint}" != "None" ]] ||
+    die "could not resolve the EKS endpoint for cluster ${AGENTGATE_CLUSTER_NAME}"
+  local normalized_server normalized_endpoint
+  normalized_server="$(tr '[:upper:]' '[:lower:]' <<<"${cluster_server%/}")"
+  normalized_endpoint="$(tr '[:upper:]' '[:lower:]' <<<"${expected_endpoint%/}")"
+  [[ "${normalized_server}" == "${normalized_endpoint}" ]] ||
+    die "current Kubernetes context ${current_context} does not point at cluster ${AGENTGATE_CLUSTER_NAME} (${cluster_server} != ${expected_endpoint})"
+
   kubectl get namespace kube-system >/dev/null
   note "Kubernetes context verified for ${AGENTGATE_CLUSTER_NAME}: ${current_context}"
+}
+
+# Resolves AGENTGATE_SECRET_DIR to a physical path (following symlinks and
+# relative segments) and refuses any location inside the repository, so the
+# outside-the-repo contract cannot be bypassed with a relative path or a
+# symlink that points back into the checkout. Prints the canonical path.
+resolve_secret_dir() {
+  local secret_dir="${AGENTGATE_SECRET_DIR:-}"
+  [[ -n "${secret_dir}" ]] ||
+    die "set AGENTGATE_SECRET_DIR to a protected directory outside the repository"
+  mkdir -p "${secret_dir}"
+  chmod 0700 "${secret_dir}"
+  secret_dir="$(cd "${secret_dir}" && pwd -P)" ||
+    die "AGENTGATE_SECRET_DIR could not be resolved"
+  local repository_root_physical
+  repository_root_physical="$(cd "${REPOSITORY_ROOT}" && pwd -P)"
+  case "${secret_dir}" in
+    "${repository_root_physical}" | "${repository_root_physical}"/*)
+      die "AGENTGATE_SECRET_DIR must be outside the repository"
+      ;;
+  esac
+  printf '%s\n' "${secret_dir}"
 }
 
 apply_namespace() {

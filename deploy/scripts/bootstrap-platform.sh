@@ -11,17 +11,7 @@ done
 verify_aws_identity
 verify_kubernetes_context
 
-secret_dir="${AGENTGATE_SECRET_DIR:-}"
-[[ -n "${secret_dir}" ]] ||
-  die "set AGENTGATE_SECRET_DIR to a protected directory outside the repository"
-mkdir -p "${secret_dir}"
-chmod 0700 "${secret_dir}"
-
-case "${secret_dir}" in
-  "${REPOSITORY_ROOT}" | "${REPOSITORY_ROOT}"/*)
-    die "AGENTGATE_SECRET_DIR must be outside the repository"
-    ;;
-esac
+secret_dir="$(resolve_secret_dir)"
 
 apply_namespace "agentgate-platform" "restricted"
 apply_namespace "spire-system" "privileged"

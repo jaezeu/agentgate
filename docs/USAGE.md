@@ -51,7 +51,7 @@ Required flags:
 | Flag | Meaning |
 | --- | --- |
 | `--tls-cert`, `--tls-key` | Server TLS certificate and key PEM |
-| `--svid-trust-bundle` | SPIFFE X.509 trust bundle PEM used to verify workload client certificates |
+| `--svid-trust-bundle` | SPIFFE X.509 trust bundle PEM used to verify workload client certificates. A bare path is accepted only with a single allowed trust domain; with several, pass comma-separated `domain=path` entries so each domain's chain verifies against its own CA bundle |
 | `--allowed-trust-domains` | Comma-separated SPIFFE trust domains accepted on the workload rail |
 | `--dispatcher-public-key` | Ed25519 public key PEM that must have signed every grant |
 | `--public-base-url` | Public AgentGate URL used in approval notifications |
