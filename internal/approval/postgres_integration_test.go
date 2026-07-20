@@ -102,11 +102,11 @@ func TestPostgresStoresLifecycleAndRace(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 
 	nonces := grant.NewPostgresNonceStore(db)
-	used, err := nonces.Use(ctx, "shared-integration-nonce", now.Add(time.Minute))
+	used, err := nonces.Use(ctx, "shared-integration-nonce", now, now.Add(time.Minute))
 	if err != nil || !used {
 		t.Fatalf("first nonce use = %v, %v; want true, nil", used, err)
 	}
-	used, err = nonces.Use(ctx, "shared-integration-nonce", now.Add(time.Minute))
+	used, err = nonces.Use(ctx, "shared-integration-nonce", now, now.Add(time.Minute))
 	if err != nil || used {
 		t.Fatalf("second nonce use = %v, %v; want false, nil", used, err)
 	}
@@ -182,6 +182,7 @@ func TestPostgresStoresLifecycleAndRace(t *testing.T) {
 		ctx,
 		record.AccessRequest.RequestID,
 		report,
+		approval.BindingEnabled,
 		now.Add(3*time.Second),
 	)
 	if err != nil || revoked.Revocation == nil || !revoked.Revocation.STSCredentialsMayRemain {
@@ -200,6 +201,7 @@ func TestPostgresStoresLifecycleAndRace(t *testing.T) {
 		ctx,
 		revokedPending.AccessRequest.RequestID,
 		vaultmgr.RevocationReport{RequestID: revokedPending.AccessRequest.RequestID},
+		approval.BindingPending,
 		now.Add(4*time.Second),
 	); err != nil {
 		t.Fatalf("RecordRevocation(pending) error = %v", err)
@@ -265,8 +267,8 @@ func TestPostgresStoresLifecycleAndRace(t *testing.T) {
 	}
 
 	raceRecord := pendingRecord(
-		"00000000-0000-4000-8000-000000000102",
-		"request-nonce-102",
+		"00000000-0000-4000-8000-000000000106",
+		"request-nonce-106",
 		now,
 	)
 	if _, _, err := requests.Create(ctx, raceRecord); err != nil {

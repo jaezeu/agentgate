@@ -223,12 +223,21 @@ func (s *MemoryStore) ReleaseExpiredBinding(_ context.Context, requestID, failur
 	return nil
 }
 
-func (s *MemoryStore) RecordRevocation(_ context.Context, requestID string, report vaultmgr.RevocationReport, at time.Time) (Record, error) {
+// RecordRevocation mirrors the Postgres guard: the terminal revoked state is
+// only stamped over the binding state the caller observed before revoking in
+// Vault, and never over an in-flight enablement (the memory store tracks no
+// claim timestamps, so every enablement claim counts as live).
+func (s *MemoryStore) RecordRevocation(_ context.Context, requestID string, report vaultmgr.RevocationReport, expectedState BindingState, at time.Time) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.records[requestID]
 	if !ok {
 		return Record{}, ErrNotFound
+	}
+	if record.RevokedAt != nil ||
+		record.BindingState != expectedState ||
+		record.BindingState == BindingEnabling {
+		return cloneRecord(record), ErrConflict
 	}
 	copyReport := report
 	copyReport.Warnings = append([]string(nil), report.Warnings...)

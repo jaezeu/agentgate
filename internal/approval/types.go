@@ -146,7 +146,7 @@ type Store interface {
 	CompleteBinding(context.Context, string, *authz.RedemptionDescriptor, string) (Record, error)
 	ClaimExpiredBinding(context.Context, time.Time) (stored Record, claimed bool, err error)
 	ReleaseExpiredBinding(context.Context, string, string, time.Time) error
-	RecordRevocation(context.Context, string, vaultmgr.RevocationReport, time.Time) (Record, error)
+	RecordRevocation(context.Context, string, vaultmgr.RevocationReport, BindingState, time.Time) (Record, error)
 	Ready(context.Context) error
 }
 

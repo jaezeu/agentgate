@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -207,7 +208,9 @@ func TestWorkloadAuthReplayAndCorrelationBoundaries(t *testing.T) {
 			!strings.Contains(response.Body.String(), "request_id_conflict") {
 			t.Fatalf("response = %d %s", response.Code, response.Body.String())
 		}
-		if harness.verifier.callCount() != 1 || harness.policy.callCount() != 0 {
+		// The conflict must be detected before Verify so the mismatched
+		// header cannot burn the grant's nonce.
+		if harness.verifier.callCount() != 0 || harness.policy.callCount() != 0 {
 			t.Fatalf(
 				"verifier calls = %d, policy calls = %d",
 				harness.verifier.callCount(),
@@ -544,6 +547,39 @@ func TestListFiltersBoundsAndStableCredentialFreeResponses(t *testing.T) {
 	invalid := harness.humanGet("/v1/requests?limit=101")
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("invalid list = %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestListReportsHasMoreAtMaximumPageSize(t *testing.T) {
+	harness := newAPIHarness(t, authz.DecisionPendingApproval)
+	for i := 0; i < 101; i++ {
+		taskGrant := harness.taskGrant(
+			fmt.Sprintf("00000000-0000-4000-8000-%012d", 300+i),
+			fmt.Sprintf("nonce-page-%03d", i),
+		)
+		accessRequest := authz.AccessRequest{
+			RequestID:          taskGrant.RequestID,
+			SPIFFEID:           testSPIFFEID,
+			TaskGrant:          taskGrant,
+			RequestedVaultRole: taskGrant.VaultRole,
+			RequestedAt:        harness.now.Add(time.Duration(i) * time.Second),
+		}
+		record := approval.NewRecord(accessRequest, authz.Decision{
+			Kind:          authz.DecisionPendingApproval,
+			Reason:        "approval required",
+			GrantedTTL:    time.Minute,
+			PolicyVersion: strings.Repeat("a", 64),
+			DecidedAt:     harness.now,
+		}, strings.Repeat("b", 64))
+		if _, _, err := harness.store.Create(context.Background(), record); err != nil {
+			t.Fatalf("seed record %d: %v", i, err)
+		}
+	}
+
+	listed := harness.humanGet("/v1/requests?limit=100")
+	if listed.Code != http.StatusOK ||
+		!strings.Contains(listed.Body.String(), `"has_more":true`) {
+		t.Fatalf("list at max page size = %d %s", listed.Code, listed.Body.String())
 	}
 }
 

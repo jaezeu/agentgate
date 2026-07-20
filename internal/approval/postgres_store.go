@@ -617,10 +617,18 @@ func (s *PostgresStore) ReleaseExpiredBinding(
 	return nil
 }
 
+// RecordRevocation stamps the terminal revoked state only when the binding is
+// still in the state the caller observed before revoking in Vault, and never
+// over a live enablement claim that could still write to Vault (a stale claim
+// from a crashed replica is allowed). Without the guard, a revoke racing an
+// in-flight enablement would mark 'revoked' over a binding whose Vault role
+// and policy outlive the recorded revocation, and revoked_at would then hide
+// the row from the expiry sweeper forever.
 func (s *PostgresStore) RecordRevocation(
 	ctx context.Context,
 	requestID string,
 	report vaultmgr.RevocationReport,
+	expectedState BindingState,
 	at time.Time,
 ) (Record, error) {
 	if err := s.validate(); err != nil {
@@ -634,7 +642,12 @@ func (s *PostgresStore) RecordRevocation(
 			return Record{}, errors.New("revocation warning is too long")
 		}
 	}
-	warnings, err := json.Marshal(report.Warnings)
+	warningValues := report.Warnings
+	if warningValues == nil {
+		// The column check requires a JSON array; a nil slice encodes as null.
+		warningValues = []string{}
+	}
+	warnings, err := json.Marshal(warningValues)
 	if err != nil {
 		return Record{}, fmt.Errorf("encode revocation warnings: %w", err)
 	}
@@ -651,6 +664,12 @@ func (s *PostgresStore) RecordRevocation(
 		    binding_updated_at = $7,
 		    updated_at = $7
 		WHERE request_id = $1
+		  AND revoked_at IS NULL
+		  AND binding_state = $8
+		  AND (
+		      binding_state <> 'enabling'
+		      OR binding_updated_at <= now() - $9 * interval '1 second'
+		  )
 	`,
 		requestID,
 		report.RoleRemoved,
@@ -659,6 +678,8 @@ func (s *PostgresStore) RecordRevocation(
 		report.STSCredentialsMayRemain,
 		warnings,
 		at.UTC(),
+		string(expectedState),
+		int64(staleBindingClaim/time.Second),
 	)
 	if err != nil {
 		return Record{}, fmt.Errorf("record revocation: %w", err)
@@ -668,7 +689,11 @@ func (s *PostgresStore) RecordRevocation(
 		return Record{}, fmt.Errorf("inspect revocation update: %w", err)
 	}
 	if rowsAffected != 1 {
-		return Record{}, ErrNotFound
+		stored, getErr := s.Get(ctx, requestID)
+		if getErr != nil {
+			return Record{}, getErr
+		}
+		return stored, ErrConflict
 	}
 	return s.Get(ctx, requestID)
 }

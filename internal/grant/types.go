@@ -40,7 +40,9 @@ type GrantVerifier interface {
 	Verify(context.Context, TaskGrant) error
 }
 
-// NonceStore atomically consumes a nonce until its grant expires.
+// NonceStore atomically consumes a nonce until its grant expires. Expiry of a
+// previously consumed nonce is judged against the caller-supplied now so the
+// replay decision uses the same clock that validated the grant's time bounds.
 type NonceStore interface {
-	Use(context.Context, string, time.Time) (bool, error)
+	Use(ctx context.Context, nonce string, now, expiresAt time.Time) (bool, error)
 }

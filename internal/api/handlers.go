@@ -161,6 +161,20 @@ func (s *server) handleAccessRequest(response http.ResponseWriter, request *http
 		)
 		return
 	}
+	// The transport-correlation check needs nothing from Verify and must run
+	// first: Verify irreversibly consumes the grant nonce, and a mismatched
+	// X-Request-ID header must not burn an otherwise valid grant.
+	correlation := correlationFromContext(request.Context())
+	if correlation.transportProvided && correlation.id != payload.TaskGrant.RequestID {
+		s.writeError(
+			response,
+			request,
+			http.StatusConflict,
+			"request_id_conflict",
+			"X-Request-ID conflicts with the signed task grant",
+		)
+		return
+	}
 	if err := s.dependencies.GrantVerifier.Verify(request.Context(), payload.TaskGrant); err != nil {
 		status, code, message := grantErrorResponse(err)
 		s.config.Logger.WarnContext(
@@ -175,17 +189,6 @@ func (s *server) handleAccessRequest(response http.ResponseWriter, request *http
 		return
 	}
 
-	correlation := correlationFromContext(request.Context())
-	if correlation.transportProvided && correlation.id != payload.TaskGrant.RequestID {
-		s.writeError(
-			response,
-			request,
-			http.StatusConflict,
-			"request_id_conflict",
-			"X-Request-ID conflicts with the signed task grant",
-		)
-		return
-	}
 	correlation.id = payload.TaskGrant.RequestID
 	request = request.WithContext(withCorrelation(request.Context(), correlation))
 	response.Header().Set("X-Request-ID", payload.TaskGrant.RequestID)
@@ -440,9 +443,7 @@ func (s *server) handleListRequests(response http.ResponseWriter, request *http.
 		limit = defaultPageSize
 	}
 	storeFilter := filter
-	if limit < maxPageSize {
-		storeFilter.Limit = limit + 1
-	}
+	storeFilter.Limit = limit + 1
 	records, err := s.dependencies.RequestStore.List(request.Context(), storeFilter)
 	if err != nil {
 		s.internalStoreFailure(response, request, "request_list_failed")
@@ -634,60 +635,95 @@ func (s *server) handleRevoke(response http.ResponseWriter, request *http.Reques
 		s.internalStoreFailure(response, request, "request_read_failed")
 		return
 	}
-	if record.Revocation != nil {
+
+	// Revocation is recorded with a compare-and-set on the binding state
+	// observed before the Vault call: if an enablement completes in between,
+	// the recorded report would describe a Vault view that no longer exists
+	// and the live binding would be hidden from the expiry sweeper forever.
+	// On a lost race, revoke again against the new state.
+	for attempt := 0; attempt < 3; attempt++ {
+		if record.Revocation != nil {
+			writeJSON(response, http.StatusOK, RevocationResponse{
+				RequestID:  requestID,
+				Revocation: *record.Revocation,
+			})
+			return
+		}
+		if record.BindingState == approval.BindingEnabling {
+			s.writeRequestError(
+				response,
+				http.StatusConflict,
+				record,
+				"revocation_conflict",
+				"binding enablement is in progress; retry revocation",
+			)
+			return
+		}
+
+		report, err := s.dependencies.VaultManager.Revoke(request.Context(), requestID)
+		if err != nil {
+			s.config.Logger.ErrorContext(
+				request.Context(),
+				"Vault revocation failed",
+				"event",
+				"revocation_failed",
+				"request_id",
+				requestID,
+			)
+			s.writeError(
+				response,
+				request,
+				http.StatusBadGateway,
+				"revocation_failed",
+				"credential-blind Vault revocation failed",
+			)
+			return
+		}
+		report, err = vaultmgr.NormalizeRevocationReport(requestID, report)
+		if err != nil {
+			s.writeError(
+				response,
+				request,
+				http.StatusBadGateway,
+				"invalid_revocation_report",
+				"Vault manager returned an invalid revocation report",
+			)
+			return
+		}
+		persistenceCtx, cancelPersistence := newPersistenceContext(request.Context())
+		_, err = s.dependencies.RequestStore.RecordRevocation(
+			persistenceCtx,
+			requestID,
+			report,
+			record.BindingState,
+			s.config.Clock().UTC(),
+		)
+		cancelPersistence()
+		if errors.Is(err, approval.ErrConflict) {
+			record, err = s.dependencies.RequestStore.Get(request.Context(), requestID)
+			if err != nil {
+				s.internalStoreFailure(response, request, "request_read_failed")
+				return
+			}
+			continue
+		}
+		if err != nil {
+			s.internalStoreFailure(response, request, "revocation_persistence_failed")
+			return
+		}
 		writeJSON(response, http.StatusOK, RevocationResponse{
 			RequestID:  requestID,
-			Revocation: *record.Revocation,
+			Revocation: report,
 		})
 		return
 	}
-
-	report, err := s.dependencies.VaultManager.Revoke(request.Context(), requestID)
-	if err != nil {
-		s.config.Logger.ErrorContext(
-			request.Context(),
-			"Vault revocation failed",
-			"event",
-			"revocation_failed",
-			"request_id",
-			requestID,
-		)
-		s.writeError(
-			response,
-			request,
-			http.StatusBadGateway,
-			"revocation_failed",
-			"credential-blind Vault revocation failed",
-		)
-		return
-	}
-	report, err = vaultmgr.NormalizeRevocationReport(requestID, report)
-	if err != nil {
-		s.writeError(
-			response,
-			request,
-			http.StatusBadGateway,
-			"invalid_revocation_report",
-			"Vault manager returned an invalid revocation report",
-		)
-		return
-	}
-	persistenceCtx, cancelPersistence := newPersistenceContext(request.Context())
-	defer cancelPersistence()
-	_, err = s.dependencies.RequestStore.RecordRevocation(
-		persistenceCtx,
-		requestID,
-		report,
-		s.config.Clock().UTC(),
+	s.writeRequestError(
+		response,
+		http.StatusConflict,
+		record,
+		"revocation_conflict",
+		"binding state kept changing during revocation; retry",
 	)
-	if err != nil {
-		s.internalStoreFailure(response, request, "revocation_persistence_failed")
-		return
-	}
-	writeJSON(response, http.StatusOK, RevocationResponse{
-		RequestID:  requestID,
-		Revocation: report,
-	})
 }
 
 func (s *server) enableBinding(ctx context.Context, record approval.Record) (approval.Record, error) {
@@ -725,6 +761,7 @@ func (s *server) enableBinding(ctx context.Context, record approval.Record) (app
 		return failed, errBindingEnablement
 	}
 	if err := validateDescriptor(record, descriptor, s.config.Clock().UTC()); err != nil {
+		s.rollbackEnabledAccess(ctx, record.AccessRequest.RequestID)
 		failed := s.completeBindingFailure(ctx, record.AccessRequest.RequestID, "Vault returned invalid redemption metadata")
 		s.appendBindingAuditAfterFailure(ctx, failed)
 		return failed, errBindingEnablement
@@ -739,9 +776,28 @@ func (s *server) enableBinding(ctx context.Context, record approval.Record) (app
 		"",
 	)
 	if err != nil {
+		s.rollbackEnabledAccess(ctx, record.AccessRequest.RequestID)
 		return record, errBindingEnablement
 	}
 	return completed, nil
+}
+
+// rollbackEnabledAccess removes Vault configuration created by an EnableAccess
+// whose result could not be validated or persisted. Reporting failure while
+// leaving the role and policy live would grant untracked access that neither
+// the expiry sweeper (no enabled binding) nor a revoke retry (report already
+// cached) would ever clean up.
+func (s *server) rollbackEnabledAccess(ctx context.Context, requestID string) {
+	if _, err := s.dependencies.VaultManager.Revoke(context.WithoutCancel(ctx), requestID); err != nil {
+		s.config.Logger.ErrorContext(
+			ctx,
+			"rollback of unpersisted Vault binding failed",
+			"event",
+			"binding_rollback_failed",
+			"request_id",
+			requestID,
+		)
+	}
 }
 
 func (s *server) completeBindingFailure(

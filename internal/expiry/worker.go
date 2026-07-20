@@ -67,18 +67,27 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) sweep(ctx context.Context) {
+	// Failed revocations keep their 'revoking' claim until the end of the
+	// sweep: releasing immediately would make the same earliest-expiring
+	// binding the first claim of every iteration, starving every later
+	// expired binding behind one persistently failing revocation.
+	var failed []string
+	reachedLimit := true
 	for range defaultBatchSize {
 		if ctx.Err() != nil {
-			return
+			reachedLimit = false
+			break
 		}
 		at := w.clock().UTC()
 		record, claimed, err := w.store.ClaimExpiredBinding(ctx, at)
 		if err != nil {
 			w.logger.Error("claim expired Vault binding", "component", "expiry_worker")
-			return
+			reachedLimit = false
+			break
 		}
 		if !claimed {
-			return
+			reachedLimit = false
+			break
 		}
 		requestID := record.AccessRequest.RequestID
 		if err := w.revoke(ctx, requestID); err != nil {
@@ -87,10 +96,21 @@ func (w *Worker) sweep(ctx context.Context) {
 				"component", "expiry_worker",
 				"request_id", requestID,
 			)
-			return
+			failed = append(failed, requestID)
 		}
 	}
-	w.logger.Warn("expired Vault binding sweep reached batch limit", "component", "expiry_worker")
+	if reachedLimit {
+		w.logger.Warn("expired Vault binding sweep reached batch limit", "component", "expiry_worker")
+	}
+	for _, requestID := range failed {
+		if err := w.release(ctx, requestID); err != nil {
+			w.logger.Error(
+				"release failed expired binding claim",
+				"component", "expiry_worker",
+				"request_id", requestID,
+			)
+		}
+	}
 }
 
 func (w *Worker) revoke(ctx context.Context, requestID string) error {
@@ -99,18 +119,24 @@ func (w *Worker) revoke(ctx context.Context, requestID string) error {
 
 	report, err := w.vaultManager.Revoke(operationContext, requestID)
 	if err != nil {
-		return errors.Join(err, w.release(ctx, requestID))
+		return err
 	}
 	report, err = vaultmgr.NormalizeRevocationReport(requestID, report)
 	if err != nil {
-		return errors.Join(err, w.release(ctx, requestID))
+		return err
 	}
 	_, err = w.store.RecordRevocation(
 		operationContext,
 		requestID,
 		report,
+		approval.BindingRevoking,
 		w.clock().UTC(),
 	)
+	if errors.Is(err, approval.ErrConflict) {
+		// Another actor recorded a revocation for this request first; the
+		// binding is already terminal and the claim row no longer exists.
+		return nil
+	}
 	return err
 }
 

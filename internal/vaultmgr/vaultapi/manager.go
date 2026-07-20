@@ -72,9 +72,28 @@ func (m *Manager) EnableAccess(
 		ExpiresAt:    enabledAt.Add(binding.GrantedTTL),
 	}
 	if err := m.appendBindingAudit(ctx, resources, "enabled", nil); err != nil {
-		return authz.RedemptionDescriptor{}, err
+		// The caller treats this error as "no access granted" and the expiry
+		// reaper only sweeps enabled bindings, so the just-configured role and
+		// policy must not stay live without an audit record of enablement.
+		rollbackErr := m.rollbackBinding(operationContext, client, resources)
+		return authz.RedemptionDescriptor{}, errors.Join(err, rollbackErr)
 	}
 	return descriptor, nil
+}
+
+func (m *Manager) rollbackBinding(
+	ctx context.Context,
+	client *hashicorpapi.Client,
+	resources bindingResources,
+) error {
+	var errs []error
+	if _, err := client.Logical().DeleteWithContext(ctx, resources.rolePath); err != nil {
+		errs = append(errs, newOperationError("roll back JWT auth role", resources.roleName, err))
+	}
+	if err := client.Sys().DeletePolicyWithContext(ctx, resources.policyName); err != nil {
+		errs = append(errs, newOperationError("roll back ACL policy", resources.policyName, err))
+	}
+	return errors.Join(errs...)
 }
 
 // Revoke removes request-scoped login configuration before removing its policy.
@@ -247,8 +266,22 @@ func sameRole(actual map[string]interface{}, resources bindingResources) bool {
 	if value, exists := actual["token_period"]; exists && !integerValueEquals(value, 0) {
 		return false
 	}
-	for _, field := range []string{"bound_claims", "token_bound_cidrs"} {
+	// groups_claim would attach external identity-group policies to issued
+	// tokens; a raised leeway accepts expired or not-yet-valid SPIFFE JWTs; a
+	// non-default token_type changes token semantics. None of these are ever
+	// set by AgentGate, so any populated value is drift.
+	for _, field := range []string{"bound_claims", "token_bound_cidrs", "groups_claim"} {
 		if value, exists := actual[field]; exists && !isEmptyValue(value) {
+			return false
+		}
+	}
+	for _, field := range []string{"expiration_leeway", "not_before_leeway", "clock_skew_leeway"} {
+		if value, exists := actual[field]; exists && !integerValueEquals(value, 0) {
+			return false
+		}
+	}
+	if value, exists := actual["token_type"]; exists {
+		if text, ok := value.(string); !ok || (text != "default" && text != "") {
 			return false
 		}
 	}

@@ -69,19 +69,27 @@ func runGrantKeygen(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeKeyFile(*publicKeyPath, publicPEM, 0o644, *force); err != nil {
+	if _, err := writeKeyFile(*publicKeyPath, publicPEM, 0o644, *force); err != nil {
 		return err
 	}
-	if err := writeKeyFile(*privateKeyPath, privatePEM, 0o600, *force); err != nil {
+	if privateOpened, err := writeKeyFile(*privateKeyPath, privatePEM, 0o600, *force); err != nil {
+		// Only undo files this invocation wrote: without -force, an open that
+		// failed with "file exists" means the path holds a pre-existing key
+		// that must not be deleted.
 		_ = os.Remove(*publicKeyPath)
-		_ = os.Remove(*privateKeyPath)
+		if privateOpened {
+			_ = os.Remove(*privateKeyPath)
+		}
 		return err
 	}
 	fmt.Printf("wrote public key %s and private key %s\n", filepath.Clean(*publicKeyPath), filepath.Clean(*privateKeyPath))
 	return nil
 }
 
-func writeKeyFile(path string, data []byte, mode os.FileMode, force bool) error {
+// writeKeyFile reports whether the file was opened for writing so callers can
+// tell a partial write (safe to clean up) from a refusal to touch an existing
+// file (which must be left intact).
+func writeKeyFile(path string, data []byte, mode os.FileMode, force bool) (bool, error) {
 	openFlags := os.O_WRONLY | os.O_CREATE
 	if force {
 		openFlags |= os.O_TRUNC
@@ -90,22 +98,22 @@ func writeKeyFile(path string, data []byte, mode os.FileMode, force bool) error 
 	}
 	file, err := os.OpenFile(path, openFlags, mode) // #nosec G304 -- output path is an explicit CLI argument.
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+		return false, fmt.Errorf("open %s: %w", path, err)
 	}
 	// The mode passed to OpenFile only applies when the file is created;
 	// an existing file replaced via -force keeps its old permissions.
 	if force {
 		if err := file.Chmod(mode); err != nil {
 			_ = file.Close()
-			return fmt.Errorf("set permissions on %s: %w", path, err)
+			return true, fmt.Errorf("set permissions on %s: %w", path, err)
 		}
 	}
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("write %s: %w", path, err)
+		return true, fmt.Errorf("write %s: %w", path, err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", path, err)
+		return true, fmt.Errorf("close %s: %w", path, err)
 	}
-	return nil
+	return true, nil
 }

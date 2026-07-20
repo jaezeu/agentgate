@@ -27,6 +27,7 @@ func TestMemoryStoreDecideRejectsRevokedRecords(t *testing.T) {
 		ctx,
 		record.AccessRequest.RequestID,
 		vaultmgr.RevocationReport{RequestID: record.AccessRequest.RequestID},
+		approval.BindingPending,
 		now.Add(time.Second),
 	); err != nil {
 		t.Fatalf("RecordRevocation() error = %v", err)

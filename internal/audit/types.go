@@ -25,6 +25,9 @@ const (
 // AuditRecord links human intent, workload identity, policy, Vault binding, and cloud correlation.
 // Details must never contain Vault tokens, leases, or cloud credential material.
 type AuditRecord struct {
+	// Sequence is the store's monotonic row identity, the tie-breaker for
+	// records sharing an occurred_at timestamp; zero for unpersisted records.
+	Sequence       int64                  `json:"sequence,omitempty"`
 	EventID        string                 `json:"event_id"`
 	RequestID      string                 `json:"request_id"`
 	EventType      EventType              `json:"event_type"`
@@ -40,12 +43,15 @@ type AuditRecord struct {
 	Details        map[string]string      `json:"details,omitempty"`
 }
 
-// Query bounds dashboard and operational audit reads.
+// Query bounds dashboard and operational audit reads. To page without
+// skipping records that share a timestamp, pass the last record's OccurredAt
+// as Before and its Sequence as BeforeSequence.
 type Query struct {
-	RequestID string
-	Decision  authz.DecisionKind
-	Limit     int
-	Before    time.Time
+	RequestID      string
+	Decision       authz.DecisionKind
+	Limit          int
+	Before         time.Time
+	BeforeSequence int64
 }
 
 // AuditStore persists and retrieves immutable correlation records.

@@ -95,7 +95,7 @@ func (v Ed25519Verifier) Verify(ctx context.Context, taskGrant TaskGrant) error 
 		return ErrExpired
 	}
 
-	used, err := v.Nonces.Use(ctx, taskGrant.Nonce, taskGrant.ExpiresAt())
+	used, err := v.Nonces.Use(ctx, taskGrant.Nonce, now, taskGrant.ExpiresAt())
 	if err != nil {
 		return fmt.Errorf("consume task grant nonce: %w", err)
 	}

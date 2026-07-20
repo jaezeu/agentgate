@@ -18,13 +18,14 @@ func NewMemoryNonceStore() *MemoryNonceStore {
 	return &MemoryNonceStore{nonces: make(map[string]time.Time)}
 }
 
-// Use atomically consumes a nonce and opportunistically removes expired entries.
-func (s *MemoryNonceStore) Use(_ context.Context, nonce string, expiresAt time.Time) (bool, error) {
+// Use atomically consumes a nonce and opportunistically removes entries that
+// have expired according to the caller's clock.
+func (s *MemoryNonceStore) Use(_ context.Context, nonce string, now, expiresAt time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for storedNonce, expiry := range s.nonces {
-		if !time.Now().Before(expiry) {
+		if !now.Before(expiry) {
 			delete(s.nonces, storedNonce)
 		}
 	}

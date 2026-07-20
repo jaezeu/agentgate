@@ -159,7 +159,7 @@ func parseServeConfig(arguments []string) (serveConfig, error) {
 	flags.StringVar(&config.listenAddress, "listen", ":8443", "HTTPS listener address")
 	flags.StringVar(&config.tlsCertificatePath, "tls-cert", "", "AgentGate server certificate PEM")
 	flags.StringVar(&config.tlsPrivateKeyPath, "tls-key", "", "AgentGate server private key PEM")
-	flags.StringVar(&config.svidTrustBundlePath, "svid-trust-bundle", "", "SPIFFE X.509 trust bundle PEM")
+	flags.StringVar(&config.svidTrustBundlePath, "svid-trust-bundle", "", "SPIFFE X.509 trust bundle PEM, or domain=path entries when several trust domains are allowed")
 	flags.StringVar(&config.allowedTrustDomains, "allowed-trust-domains", "", "comma-separated SPIFFE trust domains")
 	flags.StringVar(&config.dispatcherPublicKeyPath, "dispatcher-public-key", "", "dispatcher Ed25519 public key PEM")
 	flags.StringVar(
@@ -281,11 +281,15 @@ func buildApplication(
 	config serveConfig,
 ) (http.Handler, *tls.Config, applicationResources, error) {
 	var resources applicationResources
-	serverTLS, roots, err := loadServerTLS(config)
+	allowedTrustDomains, err := parseTrustDomains(config.allowedTrustDomains)
 	if err != nil {
 		return nil, nil, resources, err
 	}
-	allowedTrustDomains, err := parseTrustDomains(config.allowedTrustDomains)
+	unionRoots, rootsByTrustDomain, err := loadTrustBundles(config.svidTrustBundlePath, allowedTrustDomains)
+	if err != nil {
+		return nil, nil, resources, err
+	}
+	serverTLS, err := loadServerTLS(config, unionRoots)
 	if err != nil {
 		return nil, nil, resources, err
 	}
@@ -347,7 +351,11 @@ func buildApplication(
 			workloadapi.WithClientOptions(workloadapi.WithAddr(config.workloadAPIAddress)),
 		)
 	}
-	jwtSource, err := workloadapi.NewJWTSource(lifecycleContext, jwtOptions...)
+	// The context passed to NewJWTSource only bounds the wait for the first
+	// Workload API update (the watch goroutines run under their own background
+	// context until Close), so the startup timeout applies here: an
+	// unreachable SPIRE agent must fail startup, not hang it forever.
+	jwtSource, err := workloadapi.NewJWTSource(ctx, jwtOptions...)
 	if err != nil {
 		return nil, nil, resources, errors.New("initialize SPIFFE JWT source")
 	}
@@ -396,7 +404,8 @@ func buildApplication(
 		Logger:  slog.Default(),
 	}, api.Dependencies{
 		SVIDValidator: svid.X509Validator{
-			Roots:               roots,
+			Roots:               unionRoots,
+			RootsByTrustDomain:  rootsByTrustDomain,
 			AllowedTrustDomains: allowedTrustDomains,
 		},
 		GrantVerifier: grant.Ed25519Verifier{
@@ -449,31 +458,97 @@ func closeApplicationResources(resources applicationResources) {
 	}
 }
 
-func loadServerTLS(config serveConfig) (*tls.Config, *x509.CertPool, error) {
+func loadServerTLS(config serveConfig, roots *x509.CertPool) (*tls.Config, error) {
 	reloader := &certificateReloader{
 		certificatePath: config.tlsCertificatePath,
 		privateKeyPath:  config.tlsPrivateKeyPath,
 	}
 	certificate, err := reloader.load()
 	if err != nil {
-		return nil, nil, errors.New("load AgentGate TLS certificate")
+		return nil, errors.New("load AgentGate TLS certificate")
 	}
 	reloader.certificate = certificate
 
-	bundle, err := os.ReadFile(config.svidTrustBundlePath) // #nosec G304 -- path is explicit startup configuration.
-	if err != nil {
-		return nil, nil, errors.New("read SPIFFE trust bundle")
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(bundle) {
-		return nil, nil, errors.New("SPIFFE trust bundle contains no certificates")
-	}
 	return &tls.Config{
 		MinVersion:     tls.VersionTLS13,
 		GetCertificate: reloader.getCertificate,
 		ClientAuth:     tls.RequestClientCert,
 		ClientCAs:      roots,
-	}, roots, nil
+	}, nil
+}
+
+// loadTrustBundles resolves --svid-trust-bundle into per-trust-domain root
+// pools plus their union (for the TLS handshake hint list). A bare PEM path
+// is only accepted with exactly one allowed trust domain: a flat pool shared
+// by several domains would let any listed CA issue identities in every
+// domain, so multi-domain deployments must bind each domain to its own
+// bundle with domain=path entries.
+func loadTrustBundles(
+	raw string,
+	allowedTrustDomains map[string]struct{},
+) (*x509.CertPool, map[string]*x509.CertPool, error) {
+	union := x509.NewCertPool()
+	byTrustDomain := make(map[string]*x509.CertPool)
+
+	if !strings.Contains(raw, "=") {
+		if len(allowedTrustDomains) != 1 {
+			return nil, nil, errors.New(
+				"a single SPIFFE trust bundle requires exactly one allowed trust domain; use domain=path bundle entries",
+			)
+		}
+		pool, err := appendTrustBundle(raw, union)
+		if err != nil {
+			return nil, nil, err
+		}
+		for trustDomain := range allowedTrustDomains {
+			byTrustDomain[trustDomain] = pool
+		}
+		return union, byTrustDomain, nil
+	}
+
+	for _, entry := range strings.Split(raw, ",") {
+		domainPart, path, found := strings.Cut(strings.TrimSpace(entry), "=")
+		domainPart = strings.TrimSpace(domainPart)
+		path = strings.TrimSpace(path)
+		if !found || domainPart == "" || path == "" {
+			return nil, nil, errors.New("SPIFFE trust bundle entries must be domain=path")
+		}
+		trustDomain, err := spiffeid.TrustDomainFromString(domainPart)
+		if err != nil {
+			return nil, nil, errors.New("SPIFFE trust bundle entry names an invalid trust domain")
+		}
+		canonical := trustDomain.String()
+		if _, allowed := allowedTrustDomains[canonical]; !allowed {
+			return nil, nil, errors.New("SPIFFE trust bundle entry names a trust domain that is not allowed")
+		}
+		if _, duplicate := byTrustDomain[canonical]; duplicate {
+			return nil, nil, errors.New("SPIFFE trust bundle entries name a trust domain twice")
+		}
+		pool, err := appendTrustBundle(path, union)
+		if err != nil {
+			return nil, nil, err
+		}
+		byTrustDomain[canonical] = pool
+	}
+	for trustDomain := range allowedTrustDomains {
+		if _, bound := byTrustDomain[trustDomain]; !bound {
+			return nil, nil, errors.New("every allowed trust domain requires a SPIFFE trust bundle entry")
+		}
+	}
+	return union, byTrustDomain, nil
+}
+
+func appendTrustBundle(path string, union *x509.CertPool) (*x509.CertPool, error) {
+	bundle, err := os.ReadFile(path) // #nosec G304 -- path is explicit startup configuration.
+	if err != nil {
+		return nil, errors.New("read SPIFFE trust bundle")
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(bundle) {
+		return nil, errors.New("SPIFFE trust bundle contains no certificates")
+	}
+	union.AppendCertsFromPEM(bundle)
+	return pool, nil
 }
 
 func (r *certificateReloader) load() (*tls.Certificate, error) {

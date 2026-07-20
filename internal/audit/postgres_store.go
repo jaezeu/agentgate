@@ -292,7 +292,20 @@ func (s *PostgresStore) List(ctx context.Context, query Query) ([]AuditRecord, e
 		addFilter("decision = %s", string(query.Decision))
 	}
 	if !query.Before.IsZero() {
-		addFilter("occurred_at < %s", query.Before.UTC())
+		if query.BeforeSequence > 0 {
+			// Keyset cursor matching the (occurred_at DESC, id DESC) order:
+			// a bare occurred_at comparison would skip every remaining
+			// record sharing the boundary row's timestamp.
+			arguments = append(arguments, query.Before.UTC(), query.BeforeSequence)
+			fmt.Fprintf(
+				&statement,
+				" AND (occurred_at, id) < ($%d, $%d)",
+				len(arguments)-1,
+				len(arguments),
+			)
+		} else {
+			addFilter("occurred_at < %s", query.Before.UTC())
+		}
 	}
 	limit := query.Limit
 	if limit <= 0 {
@@ -341,6 +354,7 @@ func scanAuditRecord(scanner interface{ Scan(...any) error }) (AuditRecord, erro
 		detailsJSON    []byte
 	)
 	err := scanner.Scan(
+		&record.Sequence,
 		&record.EventID,
 		&record.RequestID,
 		&eventType,
@@ -436,6 +450,8 @@ func safeDetails(details map[string]string) (map[string]string, error) {
 
 func containsSensitiveName(key string) bool {
 	for _, prohibited := range []string{
+		"accesskey",
+		"apikey",
 		"authorization",
 		"credential",
 		"password",
@@ -458,7 +474,48 @@ func containsCredentialMarker(value string) bool {
 	return strings.Contains(upper, "-----BEGIN PRIVATE KEY-----") ||
 		strings.Contains(upper, "-----BEGIN RSA PRIVATE KEY-----") ||
 		strings.Contains(upper, "BEARER ") ||
-		containsAWSAccessKeyID(upper)
+		strings.Contains(upper, "HVS.") ||
+		strings.Contains(upper, "HVB.") ||
+		strings.Contains(upper, "HVR.") ||
+		containsAWSAccessKeyID(upper) ||
+		containsAWSSecretKeyCandidate(value)
+}
+
+// containsAWSSecretKeyCandidate flags exactly-40-character runs of the AWS
+// secret-key alphabet that mix upper case, lower case, and a digit or symbol.
+// The case/digit requirement keeps 40-character lowercase hex values (git
+// commit SHAs) from matching while catching real secret keys, which are
+// random base64-like strings. It runs on the original value because
+// containsCredentialMarker's upper-cased copy erases the case signal.
+func containsAWSSecretKeyCandidate(value string) bool {
+	isKeyByte := func(b byte) bool {
+		return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') ||
+			(b >= '0' && b <= '9') || b == '/' || b == '+' || b == '='
+	}
+	for start := 0; start < len(value); {
+		if !isKeyByte(value[start]) {
+			start++
+			continue
+		}
+		end := start
+		var hasUpper, hasLower, hasDigitOrSymbol bool
+		for end < len(value) && isKeyByte(value[end]) {
+			switch b := value[end]; {
+			case b >= 'A' && b <= 'Z':
+				hasUpper = true
+			case b >= 'a' && b <= 'z':
+				hasLower = true
+			default:
+				hasDigitOrSymbol = true
+			}
+			end++
+		}
+		if end-start == 40 && hasUpper && hasLower && hasDigitOrSymbol {
+			return true
+		}
+		start = end
+	}
+	return false
 }
 
 func containsAWSAccessKeyID(value string) bool {
@@ -506,6 +563,7 @@ func randomUUID() (string, error) {
 
 const auditSelect = `
 	SELECT
+		id,
 		event_id::text,
 		request_id::text,
 		event_type,

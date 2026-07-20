@@ -21,8 +21,12 @@ func NewPostgresNonceStore(db *sql.DB) *PostgresNonceStore {
 	return &PostgresNonceStore{db: db}
 }
 
-// Use consumes a nonce unless an unexpired use already exists.
-func (s *PostgresNonceStore) Use(ctx context.Context, nonce string, expiresAt time.Time) (bool, error) {
+// Use consumes a nonce unless an unexpired use already exists. The broker's
+// clock, not the database's, decides whether a prior use has expired: the
+// grant's own time bounds were checked against the broker clock, and letting
+// a database clock that runs ahead reopen the row would create a replay
+// window at the tail of every grant's lifetime.
+func (s *PostgresNonceStore) Use(ctx context.Context, nonce string, now, expiresAt time.Time) (bool, error) {
 	if s == nil || s.db == nil {
 		return false, errors.New("postgres nonce store database is required")
 	}
@@ -33,13 +37,13 @@ func (s *PostgresNonceStore) Use(ctx context.Context, nonce string, expiresAt ti
 	var used bool
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO consumed_grant_nonces (nonce, expires_at)
-		VALUES ($1, $2)
+		VALUES ($1, $3)
 		ON CONFLICT (nonce) DO UPDATE
 		SET expires_at = EXCLUDED.expires_at,
 		    consumed_at = now()
-		WHERE consumed_grant_nonces.expires_at <= now()
+		WHERE consumed_grant_nonces.expires_at <= $2
 		RETURNING TRUE
-	`, nonce, expiresAt.UTC()).Scan(&used)
+	`, nonce, now.UTC(), expiresAt.UTC()).Scan(&used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
