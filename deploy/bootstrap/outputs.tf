@@ -3,6 +3,11 @@ output "deployer_role_arn" {
   value       = module.github_oidc.oidc_role
 }
 
+output "ecr_repository_url" {
+  description = "Registry the deploy workflow pushes the application image to."
+  value       = aws_ecr_repository.application.repository_url
+}
+
 output "github_oidc_provider_arn" {
   description = "GitHub Actions IAM OIDC provider trusted by the deployer role."
   value = (

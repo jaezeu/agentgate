@@ -16,13 +16,11 @@ require_env VAULT_TOKEN_FILE
 assert_file_mode_private "${VAULT_TOKEN_FILE}"
 [[ -f "${VAULT_CACERT}" ]] || die "VAULT_CACERT does not exist: ${VAULT_CACERT}"
 
-# Optional CI trust: when the GitHub repository is provided, Vault also
-# trusts the repository's exact deploy environments through GitHub's OIDC
-# issuer so the deploy workflow can run the platform configuration pass
-# without any stored Vault token.
+# Optional CI trust: when the GitHub repository is provided, Vault trusts any
+# Actions run in that repository through GitHub's OIDC issuer so the deploy
+# workflow can run the platform configuration pass without any stored Vault
+# token.
 github_repository="${AGENTGATE_GITHUB_REPOSITORY:-}"
-plan_environment="${AGENTGATE_GITHUB_PLAN_ENVIRONMENT:-sandbox-plan}"
-apply_environment="${AGENTGATE_GITHUB_APPLY_ENVIRONMENT:-sandbox}"
 if [[ -n "${github_repository}" ]]; then
   [[ "${github_repository}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$ ]] ||
     die "AGENTGATE_GITHUB_REPOSITORY must be an owner/name repository slug"
@@ -139,14 +137,13 @@ if [[ -n "${github_repository}" ]]; then
 
   role_file="${tmp_dir}/terraform-platform.json"
   jq -n \
-    --arg plan_subject "repo:${github_repository}:environment:${plan_environment}" \
-    --arg apply_subject "repo:${github_repository}:environment:${apply_environment}" \
+    --arg subject "repo:${github_repository}:*" \
     '{
       role_type: "jwt",
       policies: ["terraform-platform"],
       bound_audiences: ["agentgate-vault"],
-      bound_claims_type: "string",
-      bound_claims: {sub: [$plan_subject, $apply_subject]},
+      bound_claims_type: "glob",
+      bound_claims: {sub: [$subject]},
       user_claim: "sub",
       token_ttl: "15m",
       token_max_ttl: "30m",
@@ -157,7 +154,7 @@ if [[ -n "${github_repository}" ]]; then
   vault write auth/jwt-deployer/role/terraform-platform \
     "@${role_file}" >/dev/null
 
-  note "Vault now trusts only the ${github_repository} ${plan_environment}/${apply_environment} GitHub environments."
+  note "Vault now trusts GitHub Actions runs in ${github_repository}."
 else
   note "AGENTGATE_GITHUB_REPOSITORY is unset; skipped GitHub OIDC trust. Local applies mint a scoped token instead."
 fi

@@ -30,28 +30,6 @@ variable "github_repository" {
   }
 }
 
-variable "github_plan_environment" {
-  description = "GitHub Actions environment allowed to run read-only plans."
-  type        = string
-  default     = "sandbox-plan"
-
-  validation {
-    condition     = can(regex("^[A-Za-z0-9._-]+$", var.github_plan_environment))
-    error_message = "github_plan_environment must be a valid GitHub environment name."
-  }
-}
-
-variable "github_apply_environment" {
-  description = "GitHub Actions environment allowed to run applies; protect it with required reviewers."
-  type        = string
-  default     = "sandbox"
-
-  validation {
-    condition     = can(regex("^[A-Za-z0-9._-]+$", var.github_apply_environment))
-    error_message = "github_apply_environment must be a valid GitHub environment name."
-  }
-}
-
 variable "create_github_oidc_provider" {
   description = "Create the token.actions.githubusercontent.com IAM OIDC provider. Set false when the account already has one and pass its ARN."
   type        = bool
