@@ -254,13 +254,23 @@ unchanged.
 
 ## AWS sandbox quickstart
 
-Use a dedicated account and read the full [deployment guide](docs/DEPLOY.md);
-the guide deliberately exposes cost and manual security boundaries rather than
-hiding them in a one-command script.
+Use a dedicated account and read the full [deployment guide](docs/DEPLOY.md).
 
-1. Complete [prerequisites](docs/DEPLOY.md#prerequisites), including an
-   existing S3 state bucket, and apply `deploy/bootstrap` (GitHub OIDC
-   deployment trust). Do not create static AWS keys.
+One-click path: configure the repository variables and the one-time
+bootstrap secrets described in
+[GitHub repository configuration](docs/DEPLOY.md#github-repository-configuration-for-ci-deploys),
+then run the `Deploy` workflow. It takes a fresh account
+through bootstrap (state bucket, OIDC deployer role, ECR), infrastructure,
+the platform including unattended Vault initialization (recovery keys and
+the initial root token land in AWS Secrets Manager, never in logs), the
+digest-pinned image build, the AgentGate control plane, and a final health
+verification. Delete the bootstrap access key and secrets after the first
+run; every later run uses OIDC only.
+
+The same layers can be applied step by step from an operator session:
+
+1. Complete [prerequisites](docs/DEPLOY.md#prerequisites) and apply
+   `deploy/bootstrap`.
 2. Run [static validation](docs/DEPLOY.md#static-validation-before-any-plan).
 3. Apply [infrastructure](docs/DEPLOY.md#apply-layer-1-infrastructure).
 4. Apply and initialize the [platform](docs/DEPLOY.md#apply-layer-2-platform-first-pass),
@@ -271,9 +281,10 @@ hiding them in a one-command script.
 7. Run the complete [90-minute lab](docs/TEACHING.md) when teaching.
 8. [Destroy in reverse order](docs/DEPLOY.md#reverse-destroy) when idle.
 
-The sandbox uses AWS SSO locally, GitHub Actions OIDC in CI, and runtime
-Kubernetes Secret references. No AWS key or Vault token belongs in Terraform
-variables, state, or GitHub. See
+The sandbox uses AWS SSO locally and GitHub Actions OIDC in CI; the only
+static AWS key is the one-time bootstrap key that creates the OIDC trust
+anchor and is deleted immediately after. No AWS key or Vault token belongs
+in Terraform variables, state, or GitHub thereafter. See
 [ADR-0001](docs/adr/0001-deployment-control-plane.md) for the deployment
 decision record.
 

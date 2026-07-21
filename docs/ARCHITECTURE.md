@@ -386,7 +386,7 @@ were rejected for this single-deployment sandbox.
 ```mermaid
 flowchart LR
     GH[GitHub Actions
-plan / gated apply / drift] -->|OIDC| DR[Deployer role]
+plan / gated apply] -->|OIDC| DR[Deployer role]
     OP[Operator AWS SSO] --> ST
     DR --> ST[(S3 state
 lockfile + KMS)]

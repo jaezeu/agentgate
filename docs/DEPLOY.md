@@ -35,27 +35,51 @@ each root carries a placeholder `backend "s3"` block completed by
 
 | Root | State | Execution |
 | --- | --- | --- |
-| `deploy/bootstrap` | Local file kept with operator bootstrap material | Operator only |
+| `deploy/bootstrap` | `s3://<state-bucket>/bootstrap.tfstate` | Operator or GitHub Actions (first run: one-time IAM user key) |
 | `deploy/infra` | `s3://<state-bucket>/infra.tfstate` | Operator (AWS SSO) or GitHub Actions OIDC |
 | `deploy/platform` | `s3://<state-bucket>/platform.tfstate` | Operator or GitHub Actions OIDC |
 | `deploy/agentgate` | `s3://<state-bucket>/agentgate.tfstate` | Operator or GitHub Actions OIDC |
 
 The bootstrap root creates the `token.actions.githubusercontent.com` IAM
-OIDC provider and one deployer role trusted only for this repository's
-`sandbox-plan` and `sandbox` GitHub environments, through the community
-`terraform-module/github-oidc-provider/aws` module. The state bucket is
-pre-provisioned and not managed by Terraform. See
+OIDC provider and one deployer role trusted for GitHub Actions runs in this
+repository (subject `repo:<owner>/<repo>:*`), through the community
+`terraform-module/github-oidc-provider/aws` module, plus the ECR
+repository the deploy workflow pushes the application image to. The state
+bucket is created idempotently by `deploy/scripts/ci-ensure-state-bucket.sh`
+(or pre-provisioned manually). See
 [ADR-0001](adr/0001-deployment-control-plane.md) for the decision record.
+
+## One-click deployment
+
+The `Deploy` workflow takes a fresh account end to end in one run:
+`bootstrap` (state bucket, OIDC deployer role, ECR) -> `infra` -> `platform`
+(both passes, with unattended Vault initialization; recovery keys and the
+initial root token are stored in AWS Secrets Manager under
+`agentgate-sandbox/vault-init`) -> `image` (build and push by digest) ->
+`agentgate` (applies the control plane, then runs the cluster health check).
+The run is fully unattended; if a stage fails, fix the cause and use GitHub's
+"Re-run failed jobs" to resume from there. Only `workflow_dispatch` can start
+it, so no pull request or push can deploy.
+
+The only manual input, once ever: an IAM user access key stored as the
+`AGENTGATE_BOOTSTRAP_ACCESS_KEY_ID` / `AGENTGATE_BOOTSTRAP_SECRET_ACCESS_KEY`
+secrets so the first bootstrap run can create the OIDC trust anchor. Delete
+the key and both secrets as soon as the bootstrap stage has produced the
+deployer role; every later run uses OIDC only. If `deploy/bootstrap` was
+previously applied with local state, migrate it once with
+`terraform -chdir=deploy/bootstrap init -migrate-state` against the S3
+backend before running the workflow.
+
+This guide's remaining sections document the same layers for operators who
+apply locally, and every verification checkpoint applies to both paths.
 
 ## Deployment pipeline
 
 ```mermaid
 flowchart LR
     subgraph GitHub
-        W[deploy.yml workflow] -->|OIDC id-token| E{environment}
-        E -->|sandbox-plan| P[plan]
-        E -->|sandbox, protected| A[apply]
-        D[scheduled drift plan] --> P
+        W[deploy.yml workflow] -->|workflow_dispatch| J[bootstrap / infra / platform / image / agentgate]
+        J -->|OIDC id-token| R
     end
 
     subgraph AWS[AWS sandbox account]
@@ -66,11 +90,11 @@ versioning + lockfile)]
     end
 
     O[Operator with AWS SSO] -->|same backend| S
-    P & A -->|AssumeRoleWithWebIdentity| R
+    J -->|AssumeRoleWithWebIdentity| R
     R --> S
     R -->|infra root: AWS APIs| K
-    A -->|platform root: kubectl port-forward| V[In-cluster Vault]
-    V -->|jwt-deployer login, 15m token| A
+    J -->|platform root: kubectl port-forward| V[In-cluster Vault]
+    V -->|jwt-deployer login, 15m token| J
 ```
 
 Local applies and CI applies share the same state and the same identity
@@ -189,7 +213,8 @@ Vault provider arguments were checked against `vault_audit`,
 | PostgreSQL image | digest `sha256:db2312d9b243afa8c3b3f5496e478d17d0dff9791d06f3b93b9567abd86ae92f` | [Bitnami PostgreSQL container](https://github.com/bitnami/containers/tree/main/bitnami/postgresql) |
 | Go builder | `1.24.13-alpine3.23@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191` | [Go downloads](https://go.dev/dl/#go1.24.13), [Docker Official Image](https://hub.docker.com/_/golang) |
 | Distroless runtime | `static-debian13:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6` | [Distroless repository](https://github.com/GoogleContainerTools/distroless) |
-| kubectl in deploy workflow | `1.36.1`, linux/amd64 sha256 `629d3f410e09bf49b64ae7079f7f0bda1191efed311f7d37fdbab0ad5b0ec2b7` | [kubectl install docs](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/), [release binaries](https://dl.k8s.io/release/v1.36.1/bin/linux/amd64/) |
+| kubectl in deploy workflow | runner-bundled kubectl (ubuntu-latest), within one minor of EKS `1.36` | [runner images](https://github.com/actions/runner-images) |
+| Vault CLI in deploy workflow | `1.20.4` | [Vault CLI releases](https://releases.hashicorp.com/vault/) |
 
 The SPIRE umbrella chart advertises app version `1.14.5`, while its packaged
 component charts select `1.15.1`. The values file explicitly pins each SPIRE
@@ -252,11 +277,12 @@ shared production account.
 Required:
 
 - AWS sandbox account and an AWS SSO role for the human operator;
-- an existing S3 bucket for Terraform state (versioned and encrypted;
-  this reference does not create it);
-- a GitHub repository (this one or a fork) if CI-driven deploys and drift
-  detection are wanted; local-only operation needs no GitHub setup;
-- an OCI registry for the locally built application image;
+- an S3 bucket name for Terraform state (the deploy workflow creates it
+  versioned and encrypted if missing);
+- a GitHub repository (this one or a fork) if CI-driven deploys are wanted;
+  local-only operation needs no GitHub setup;
+- an OCI registry for the application image (the bootstrap root creates an
+  ECR repository for the workflow path);
 - one HTTPS, Slack-compatible approval webhook endpoint for the sandbox;
 - Terraform `1.15.6`;
 - AWS CLI v2;
@@ -361,30 +387,27 @@ Use the operator's real public egress `/32`, not the documentation address.
 deliberately for CI-driven cluster applies; the endpoint then still requires
 IAM authentication for every request.
 
-### GitHub repository configuration (optional, for CI deploys and drift)
+### GitHub repository configuration (for CI deploys)
 
-In the repository settings:
-
-1. Create environment `sandbox-plan` with no protection rules and
-   environment `sandbox` with required reviewers. The deployer role trusts
-   only these two environment subjects; pull requests and pushes cannot
-   assume it.
-2. Create Actions variables:
+The deploy workflow uses no GitHub environments; the deployer role trusts any
+Actions run in this repository, and `workflow_dispatch` is the only trigger,
+so no pull request or push can deploy. In the repository settings, create the
+Actions variables:
 
 ```text
-AGENTGATE_STATE_BUCKET            = <existing state bucket name>
+AGENTGATE_STATE_BUCKET            = <state bucket name; created if missing>
 AGENTGATE_AWS_REGION              = <sandbox region>
-AGENTGATE_DEPLOYER_ROLE_ARN       = <bootstrap output deployer_role_arn>
 AGENTGATE_EKS_PUBLIC_ACCESS_CIDRS = <JSON list of allowed CIDRs>
 AGENTGATE_ALLOW_PUBLIC_CLUSTER_ENDPOINT = false
 AGENTGATE_OPERATOR_PRINCIPAL_ARNS = <JSON list, may be []>
 AGENTGATE_CLUSTER_NAME            = agentgate-sandbox-eks
-AGENTGATE_VAULT_CONFIGURED        = false
 ```
 
-`AGENTGATE_VAULT_CONFIGURED` flips to `true` only after the Vault bootstrap
-below; `AGENTGATE_APPLICATION_IMAGE` is added before layer 3. No variable is
-a secret; the workflow holds no static credential of any kind.
+`AGENTGATE_DEPLOYER_ROLE_ARN` is written back by the bootstrap stage (or set
+manually from its output). No variable is a secret. For the first run only,
+add the `AGENTGATE_BOOTSTRAP_ACCESS_KEY_ID` /
+`AGENTGATE_BOOTSTRAP_SECRET_ACCESS_KEY` secrets described in
+[One-click deployment](#one-click-deployment) and delete them afterwards.
 
 ## Static validation before any plan
 
@@ -454,8 +477,7 @@ Expected plan shape includes:
 - one private, encrypted, versioned S3 demo bucket.
 
 Review every create action and the current pricing. Apply either from the
-operator environment or through the deploy workflow (`root=infra`,
-`action=apply`, approved in the protected `sandbox` environment):
+operator environment or as the `infra` stage of the deploy workflow:
 
 ```bash
 terraform -chdir=deploy/infra apply -input=false
@@ -643,23 +665,11 @@ deploy/scripts/bootstrap-vault.sh
 This writes the `terraform-platform` policy, which manages only platform
 configuration paths and has no `aws/creds/*` path. When
 `AGENTGATE_GITHUB_REPOSITORY` is set it also enables a `jwt-deployer` JWT
-auth mount trusting GitHub's OIDC issuer with `sub` bound to exactly:
-
-```text
-repo:<owner>/<repo>:environment:sandbox-plan
-repo:<owner>/<repo>:environment:sandbox
-```
-
-audience `agentgate-vault`, 15-minute tokens, and only the
-`terraform-platform` policy. No Vault credential is stored in GitHub; the
-deploy workflow exchanges its per-job OIDC identity token at run time
-(`deploy/scripts/ci-vault-env.sh`).
-
-If CI deploys are wanted, flip the repository variable now:
-
-```text
-AGENTGATE_VAULT_CONFIGURED = true
-```
+auth mount trusting GitHub's OIDC issuer with `sub` bound (glob) to
+`repo:<owner>/<repo>:*`, audience `agentgate-vault`, 15-minute tokens, and
+only the `terraform-platform` policy. No Vault credential is stored in
+GitHub; the deploy workflow exchanges its per-job OIDC identity token at run
+time (`deploy/scripts/ci-vault-env.sh`).
 
 ## Apply layer 2: Vault configuration pass
 
@@ -678,9 +688,13 @@ terraform -chdir=deploy/platform apply -input=false
 unset VAULT_TOKEN
 ```
 
-Through CI instead: run the deploy workflow with `root=platform` after
-setting `AGENTGATE_VAULT_CONFIGURED=true`; the workflow port-forwards Vault,
-logs in through `jwt-deployer`, and applies with the same variables.
+Through CI instead: the `platform` stage does all of the above unattended.
+`deploy/scripts/ci-bootstrap-vault.sh` port-forwards Vault, initializes it if
+needed (storing recovery keys and the initial root token in AWS Secrets
+Manager), runs `bootstrap-vault.sh`, and the final pass logs in through
+`jwt-deployer` (`deploy/scripts/ci-vault-env.sh`) and applies with
+`vault_configuration_enabled=true`. The stage detects an existing Vault and
+never re-runs the pre-Vault pass.
 
 Expected additional resources:
 
@@ -783,9 +797,12 @@ container and is not printed.
 
 ## Build and apply layer 3
 
-Build from a reviewed revision containing the integrated API and runner. The
-runner Job remains suspended by default because direct Vault redemption can mint
-real short-lived AWS STS values.
+Through CI: the `image` stage builds `deploy/images/Dockerfile` from the
+workflow's checked-out revision, pushes it to the bootstrap-created ECR
+repository tagged with the commit SHA, resolves the immutable digest, and the
+`agentgate` stage applies with it. The manual path below achieves the same
+with any registry. Either way, the runner Job remains suspended by default
+because direct Vault redemption can mint real short-lived AWS STS values.
 
 ```bash
 export APP_REGISTRY='ghcr.io/replace-me/agentgate'
@@ -819,8 +836,8 @@ printf '\n'
 chmod 0600 "${AGENTGATE_SECRET_DIR}/approval-webhook-url"
 ```
 
-Expose only the immutable image reference to Terraform (and, for CI deploys,
-set the same value as the `AGENTGATE_APPLICATION_IMAGE` repository variable):
+Expose only the immutable image reference to Terraform (the deploy workflow's
+`image` stage does this automatically from its own build):
 
 ```bash
 export TF_VAR_application_image="${AGENTGATE_APPLICATION_IMAGE}"

@@ -34,7 +34,7 @@ this sandbox would be metered on an external SaaS.
    the `token.actions.githubusercontent.com` IAM OIDC provider and one
    deployer role trusted only for this repository's `sandbox-plan` and
    `sandbox` environments. `deploy.yml` runs plan/apply per root plus
-   scheduled drift detection. Applies are gated by the protected `sandbox`
+   staged one-click deployment. Applies are gated by the `sandbox`
    environment. Local applies remain first-class through AWS SSO with the
    same S3 backend.
 3. **Vault trusts GitHub OIDC instead of HCP.** `bootstrap-vault.sh` writes
@@ -65,7 +65,7 @@ this sandbox would be metered on an external SaaS.
 Enterprises split into a governance-procurement camp (TFE/HCP, Spacelift)
 and an engineering-led camp (CI + OIDC + object-store state). This design
 implements the control properties both camps share: zero static credentials,
-encrypted/versioned/locked state, reviewed applies, drift detection,
+encrypted/versioned/locked state, reviewed applies,
 attributable deploys, and pinned toolchains. Known deltas from a large-org
 setup, deliberate for a sandbox: single account (no landing zone), one
 deployer role instead of split plan/apply roles, AdministratorAccess with a
