@@ -6,8 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 root="${1:-}"
-[[ "${root}" == "infra" || "${root}" == "platform" || "${root}" == "agentgate" ]] ||
-  die "usage: $0 <infra|platform|agentgate>"
+[[ "${root}" == "bootstrap" || "${root}" == "infra" || "${root}" == "platform" || "${root}" == "agentgate" ]] ||
+  die "usage: $0 <bootstrap|infra|platform|agentgate>"
 
 require_command terraform
 require_env AGENTGATE_STATE_BUCKET
